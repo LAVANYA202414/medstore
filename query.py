@@ -1,23 +1,40 @@
-from fastapi import FastAPI
+from fastapi import APIRouter
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaEmbeddings
+import pandas as pd
 
-app = FastAPI()
+router = APIRouter()
 
-embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embedding_function)
+# Load CSV once
+df = pd.read_csv("products.csv").fillna("")
 
-@app.get("/query")
-def query_data(q: str):
-    results = vector_db.similarity_search_with_score(q, k=10)
+@router.get("/query")
+def ask_rag_bot(user_query: str):
+    embedding_function = OllamaEmbeddings(model="all-minilm")
+    vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embedding_function)
     
-    available_items = []
+    results = vector_db.similarity_search_with_score(user_query, k=10)
+    
+    products = []
     for doc, score in results:
-        if score > 1.2:  # too far = nonsense query
+        row_num = doc.metadata.get("row")
+        if row_num is None:
             continue
-        row = doc.metadata
-        if row.get("Published") != "1": continue
-        if row.get("Visibility in catalogue") != "visible": continue
-        available_items.append(row)
+        try:
+            # Get full product data from CSV by row number
+            product_data = df.iloc[int(row_num)].to_dict()
+            
+            # skip empty Name
+            if not str(product_data.get("Name")).strip():
+                continue
+                
+            products.append(product_data)
+            
+            if len(products) >= 5:
+                break
+        except:
+            continue
 
-    return {"available_items": available_items, "count": len(available_items), "query": q}
+    return {
+        "products": products
+    }

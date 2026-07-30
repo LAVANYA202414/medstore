@@ -1,46 +1,24 @@
-import csv, re
-from langchain_core.documents import Document
+from fastapi import APIRouter
+from langchain_community.document_loaders.csv_loader import CSVLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-import os, shutil
+from langchain_ollama import OllamaEmbeddings
 
-# Delete old broken DB
-if os.path.exists("./chroma_db"):
-    shutil.rmtree("./chroma_db")
+router = APIRouter()
 
-def clean(t):
-    return re.sub(r'<[^<]+?>', ' ', t or '').strip()
+@router.post("/ingest")
+def ingest_csv():
+    loader = CSVLoader(
+        file_path="/home/lavanya/Desktop/Lavanya/med_store/products.csv",
+        csv_args={'delimiter': ',', 'quotechar': '"'}
+    )
+    documents = loader.load()
 
-print("Loading model...")
-embedding = HuggingFaceEmbeddings(
-    model_name="all-MiniLM-L6-v2",
-    cache_folder="./model_cache"
-)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = text_splitter.split_documents(documents)
 
-db = Chroma(
-    persist_directory="./chroma_db",
-    embedding_function=embedding
-)
+    embedding_function = OllamaEmbeddings(model="all-minilm")
 
-docs = []
-with open("./products.csv", encoding="utf-8-sig") as f:
-    for row in csv.DictReader(f):
-        name = row.get("Name","").strip()
-        if not name:
-            continue
-        # Search text = Name + Description + Categories + Tags
-        search_text = f"{name} {clean(row.get('Description',''))} {row.get('Categories','')} {row.get('Tags','')}"
-        docs.append(Document(
-            page_content=search_text,
-            metadata=row  # Whole row saved
-        ))
+    vector_db = Chroma.from_documents(chunks, embedding_function, persist_directory="./chroma_db")
 
-print(f"Total docs: {len(docs)} - Adding in batches of 1000...")
-
-BATCH = 500
-for i in range(0, len(docs), BATCH):
-    batch = docs[i:i+BATCH]
-    db.add_documents(batch)
-    print(f"Added {i+len(batch)}/{len(docs)}")
-
-print("Done - chroma_db ready with whole row metadata")
+    return {"message": f"Success! Ingested {len(chunks)} chunks into './chroma_db'"}
