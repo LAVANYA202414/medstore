@@ -1,0 +1,14 @@
+# Ignore python environment files and dependencies
+med_store_env/
+__pycache__/
+*.pyc
+
+# Ignore old databases
+old_chroma/
+
+# Ignore local AI model downloads
+model_cache/
+
+# Ignore original data files and temporary lock sheets
+*.csv
+.~lock.*#
