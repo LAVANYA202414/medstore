@@ -12,3 +12,7 @@ model_cache/
 # Ignore original data files and temporary lock sheets
 *.csv
 .~lock.*#
+
+ingest_chunk.py
+main.py
+trial.py
