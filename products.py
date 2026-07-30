@@ -1,12 +1,23 @@
 import math
 import pandas as pd
 from fastapi import FastAPI, Query
-from typing import Dict, Any, Optional
-
-import ingest 
+from typing import Optional
+from fastapi.middleware.cors import CORSMiddleware
+import ingest
 import query
 
 app = FastAPI(title="Product Catalog API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:8000"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 df = pd.read_csv("products.csv").fillna("")
 df.columns = df.columns.str.strip()
@@ -22,7 +33,6 @@ def get_products(
     limit: int = Query(10, ge=1, le=100)
 ):
     filtered_df = df
-
     if category:
         cat_norm = normalize(category)
         def match(cell: str) -> bool:
@@ -56,7 +66,6 @@ def get_categories():
             node = tree
             for part in parts:
                 node = node.setdefault(part, {})
-
     def build(node):
         return [
             {
@@ -66,7 +75,6 @@ def get_categories():
             }
             for name, child in sorted(node.items())
         ]
-
     return build(tree)
 
 app.include_router(ingest.router)
