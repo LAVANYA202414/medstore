@@ -13,7 +13,7 @@ app = FastAPI(title="Product Catalog API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:8000", "medstoreapi.codenomad.net", "https://medstoreapi.codenomad.net"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:8000", "medstore.codenomad.net", "https://medstore.codenomad.net"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
