@@ -11,61 +11,76 @@ app = FastAPI(title="Product Catalog API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:8000"
-    ],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+def to_slug(s):
+    return re.sub(r'[^a-z0-9]+', '-', str(s).lower()).strip('-')
+
+def normalize(text: str):
+    return " > ".join([p.strip().lower() for p in str(text).split(">")]).strip()
+
+def get_primary_path(categories_str: str):
+    paths = [p.strip() for p in str(categories_str).split(",") if p.strip()]
+    if not paths:
+        return "uncategorized"
+    paths = sorted(paths, key=lambda x: x.count(">"), reverse=True)
+    return paths[0]
+
 df = pd.read_csv("products.csv").fillna("")
 df.columns = df.columns.str.strip()
-df = df.drop_duplicates(subset=["Name"], keep="first")
+df = df[df['Name'].astype(str).str.strip()!= ""]
+df = df.drop_duplicates(subset=["Name"], keep="first").reset_index(drop=True)
 
-def normalize(text: str) -> str:
-    return " > ".join([p.strip().lower() for p in text.split(">")]).strip()
+all_products = []
+counter = 1
 
+for _, row in df.iterrows():
+    name = str(row['Name']).strip()
+    if name == "":
+        continue
 
-def to_slug(s):
-    return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+    primary = get_primary_path(row['Categories'])
+    parts = [p.strip() for p in primary.split(">")]
 
-df = pd.read_csv("products.csv").fillna("")
-df = df.drop_duplicates(subset=["Name"], keep="first")
+    top = parts[0] if len(parts) > 0 else "uncategorized"
+    sub = parts[1] if len(parts) > 1 else ""
 
-products = []
-for i, row in df.iterrows():
-    # Categories = "Diagnostics > Blood Pressure/Vital, Emergency > Bags"
-    # Take first path as primary
-    first_path = str(row['Categories']).split(',')[0].strip()
-    parts = [p.strip() for p in first_path.split('>')]
+    try:
+        price = float(row['Regular price'] or row['Sale price'] or 0)
+    except:
+        price = 0
 
-    top = parts[0] if len(parts)>0 else "uncategorized"
-    sub = parts[1] if len(parts)>1 else ""
+    short_desc = str(row['Short description']).strip()
+    if not short_desc:
+        short_desc = str(row['Description'])[:150].strip()
 
-    products.append({
-        "id": f"p{i+1}",
-        "name": row['Name'],
-        "slug": to_slug(row['Name']),
-        "description": row['Short description'] or row['Description'][:120],
-        "longDescription": row['Description'],
-        "categoryId": to_slug(top), # cat-diagnostics
-        "subcategoryId": to_slug(sub), # sub-bp
+    all_products.append({
+        "id": f"p{counter}",
+        "name": name,
+        "slug": to_slug(name),
+        "description": short_desc,
+        "longDescription": str(row['Description']),
+        "categoryId": to_slug(top),
+        "subcategoryId": to_slug(sub) if sub else "",
         "categoryName": top,
         "subcategoryName": sub,
-        "price": float(row['Regular price'] or row['Sale price'] or 0),
-        "brand": row.get('Brand','') or 'Generic',
+        "price": price,
+        "brand": "Generic",
         "inStock": str(row['In stock?']) == '1',
-        "rating": 4.5, # file doesn't have rating, set default or random
+        "rating": 4.5,
         "tint": "#dceef7",
         "icon": to_slug(sub).split('-')[0] if sub else to_slug(top).split('-')[0],
         "image": str(row['Images']).split(',')[0].strip() if row['Images'] else "/products/placeholder.png",
         "tags": [t.strip() for t in str(row['Tags']).split(',') if t.strip()][:5],
-        "specifications": {
-            "Model": row.get('Attribute 1 value(s)',''),
-        }
+        "specifications": {"Model": str(row.get('Attribute 1 value(s)', ''))},
+        "_raw_categories": str(row['Categories'])
     })
+    counter += 1
+
 
 @app.get("/products")
 def get_products(
@@ -73,20 +88,31 @@ def get_products(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100)
 ):
-    filtered_df = df
-    if category:
-        cat_norm = normalize(category)
-        def match(cell: str) -> bool:
-            paths = [normalize(p) for p in str(cell).split(",")]
-            for p in paths:
-                if p == cat_norm or p.startswith(cat_norm + " >"):
-                    return True
-            return False
-        filtered_df = filtered_df[filtered_df["Categories"].apply(match)]
+    filtered = all_products
 
-    total_items = len(filtered_df)
+    if category:
+        cat_norm = normalize(category).lower()
+        new_list = []
+        for p in filtered:
+            paths = [normalize(x).lower() for x in p["_raw_categories"].split(",")]
+            for path in paths:
+                parts = [s.strip() for s in path.split(">")]
+                # matches if category is full path, or is any level inside path
+                if cat_norm == path or cat_norm in parts or f" > {cat_norm}" in path or f"{cat_norm} >" in path:
+                    new_list.append(p)
+                    break
+        filtered = new_list
+
+    total_items = len(filtered)
     total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
-    paginated = filtered_df.iloc[(page-1)*limit : page*limit]
+    start = (page - 1) * limit
+    paginated = filtered[start:start+limit]
+
+    result = []
+    for p in paginated:
+        clean = {k: v for k, v in p.items() if not k.startswith("_")}
+        # del clean["fullPath"] <- REMOVE THIS LINE
+        result.append(clean)
 
     return {
         "metadata": {
@@ -95,7 +121,7 @@ def get_products(
             "current_page": page,
             "limit": limit
         },
-        "products": paginated.to_dict(orient="records")
+        "products": result
     }
 
 @app.get("/categories")
@@ -109,29 +135,16 @@ def get_categories():
                 node = node.setdefault(part, {})
 
     def build(node):
-        result = []
+        out = []
         for name, child in sorted(node.items()):
-            slug = to_slug(name)
-            result.append(
-                {
-                    "id": slug,
-                    "name": name,
-                    "shortName": name,
-                    "slug": slug,
-                    "description": f"{name} products and accessories.",
-                    "icon": slug.split("-")[0] if slug else "",
-                    "subcategories": [
-                        {
-                            "id": to_slug(sub),
-                            "name": sub,
-                            "slug": to_slug(sub)
-                        }
-                        for sub in sorted(child.keys())
-                    ],
-                    "children": build(child)
-                }
-            )
-        return result
+            out.append({
+                "id": to_slug(name),
+                "name": name,
+                "slug": to_slug(name),
+                "subcategories": sorted(child.keys()), # simple list
+                "children": build(child)
+            })
+        return out
 
     return build(tree)
 
