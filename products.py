@@ -6,6 +6,8 @@ from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 import ingest
 import query
+from html import unescape
+
 
 app = FastAPI(title="Product Catalog API")
 
@@ -17,11 +19,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def strip_html(text: str) -> str:
+    if not text:
+        return ""
+    # decode &deg; &amp; etc
+    text = unescape(text)
+    # remove <p> <br> etc
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # clean extra spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def to_slug(s):
     return re.sub(r'[^a-z0-9]+', '-', str(s).lower()).strip('-')
 
+
 def normalize(text: str):
     return " > ".join([p.strip().lower() for p in str(text).split(">")]).strip()
+
 
 def get_primary_path(categories_str: str):
     paths = [p.strip() for p in str(categories_str).split(",") if p.strip()]
@@ -29,6 +45,7 @@ def get_primary_path(categories_str: str):
         return "uncategorized"
     paths = sorted(paths, key=lambda x: x.count(">"), reverse=True)
     return paths[0]
+
 
 df = pd.read_csv("products.csv").fillna("")
 df.columns = df.columns.str.strip()
@@ -85,9 +102,32 @@ for _, row in df.iterrows():
 @app.get("/products")
 def get_products(
     category: Optional[str] = Query(None),
+    product: Optional[str] = Query(None, description="Product name or slug"),
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100)
 ):
+    # 1. If product name/slug is mentioned -> return that product detail
+    if product:
+        prod_norm = product.strip().lower()
+        prod_slug = to_slug(prod_norm)
+
+        for p in all_products:
+            if p["name"].lower() == prod_norm or p["slug"] == prod_slug or p["slug"] == prod_norm:
+                clean = {k: v for k, v in p.items() if not k.startswith("_")}
+                clean["description"] = strip_html(clean["description"])
+                clean["longDescription"] = strip_html(clean["longDescription"])
+                return clean
+
+        for p in all_products:
+            if prod_norm in p["name"].lower() or prod_norm in p["slug"]:
+                clean = {k: v for k, v in p.items() if not k.startswith("_")}
+                clean["description"] = strip_html(clean["description"])
+                clean["longDescription"] = strip_html(clean["longDescription"])
+                return clean
+
+        return {"error": f"Product '{product}' not found"}
+
+    # 2. If product not mentioned -> filter by category
     filtered = all_products
 
     if category:
@@ -97,7 +137,6 @@ def get_products(
             paths = [normalize(x).lower() for x in p["_raw_categories"].split(",")]
             for path in paths:
                 parts = [s.strip() for s in path.split(">")]
-                # matches if category is full path, or is any level inside path
                 if cat_norm == path or cat_norm in parts or f" > {cat_norm}" in path or f"{cat_norm} >" in path:
                     new_list.append(p)
                     break
@@ -111,7 +150,9 @@ def get_products(
     result = []
     for p in paginated:
         clean = {k: v for k, v in p.items() if not k.startswith("_")}
-        # del clean["fullPath"] <- REMOVE THIS LINE
+        # ONLY CLEAN WHILE SENDING RESPONSE
+        clean["description"] = strip_html(clean["description"])
+        clean["longDescription"] = strip_html(clean["longDescription"])
         result.append(clean)
 
     return {
@@ -123,6 +164,7 @@ def get_products(
         },
         "products": result
     }
+
 
 @app.get("/categories")
 def get_categories():
