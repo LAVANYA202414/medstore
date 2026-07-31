@@ -1,3 +1,4 @@
+import re
 import math
 import pandas as pd
 from fastapi import FastAPI, Query
@@ -25,6 +26,47 @@ df = df.drop_duplicates(subset=["Name"], keep="first")
 
 def normalize(text: str) -> str:
     return " > ".join([p.strip().lower() for p in text.split(">")]).strip()
+
+import re, pandas as pd
+
+def to_slug(s):
+    return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+
+df = pd.read_csv("products.csv").fillna("")
+df = df.drop_duplicates(subset=["Name"], keep="first")
+
+products = []
+for i, row in df.iterrows():
+    # Categories = "Diagnostics > Blood Pressure/Vital, Emergency > Bags"
+    # Take first path as primary
+    first_path = str(row['Categories']).split(',')[0].strip()
+    parts = [p.strip() for p in first_path.split('>')]
+
+    top = parts[0] if len(parts)>0 else "uncategorized"
+    sub = parts[1] if len(parts)>1 else ""
+
+    products.append({
+        "id": f"p{i+1}",
+        "name": row['Name'],
+        "slug": to_slug(row['Name']),
+        "description": row['Short description'] or row['Description'][:120],
+        "longDescription": row['Description'],
+        "categoryId": to_slug(top), # cat-diagnostics
+        "subcategoryId": to_slug(sub), # sub-bp
+        "categoryName": top,
+        "subcategoryName": sub,
+        "price": float(row['Regular price'] or row['Sale price'] or 0),
+        "brand": row.get('Brand','') or 'Generic',
+        "inStock": str(row['In stock?']) == '1',
+        "rating": 4.5, # file doesn't have rating, set default or random
+        "tint": "#dceef7",
+        "icon": to_slug(sub).split('-')[0] if sub else to_slug(top).split('-')[0],
+        "image": str(row['Images']).split(',')[0].strip() if row['Images'] else "/products/placeholder.png",
+        "tags": [t.strip() for t in str(row['Tags']).split(',') if t.strip()][:5],
+        "specifications": {
+            "Model": row.get('Attribute 1 value(s)',''),
+        }
+    })
 
 @app.get("/products")
 def get_products(
@@ -66,15 +108,32 @@ def get_categories():
             node = tree
             for part in parts:
                 node = node.setdefault(part, {})
+
     def build(node):
-        return [
-            {
-                "name": name,
-                "subcategories": [sub for sub in sorted(child.keys())] if child else [],
-                "children": build(child)
-            }
-            for name, child in sorted(node.items())
-        ]
+        result = []
+        for name, child in sorted(node.items()):
+            slug = to_slug(name)
+            result.append(
+                {
+                    "id": slug,
+                    "name": name,
+                    "shortName": name,
+                    "slug": slug,
+                    "description": f"{name} products and accessories.",
+                    "icon": slug.split("-")[0] if slug else "",
+                    "subcategories": [
+                        {
+                            "id": to_slug(sub),
+                            "name": sub,
+                            "slug": to_slug(sub)
+                        }
+                        for sub in sorted(child.keys())
+                    ],
+                    "children": build(child)
+                }
+            )
+        return result
+
     return build(tree)
 
 app.include_router(ingest.router)
