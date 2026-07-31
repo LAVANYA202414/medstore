@@ -27,7 +27,6 @@ df = df.drop_duplicates(subset=["Name"], keep="first")
 def normalize(text: str) -> str:
     return " > ".join([p.strip().lower() for p in text.split(">")]).strip()
 
-import re, pandas as pd
 
 def to_slug(s):
     return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
