@@ -15,3 +15,7 @@ model_cache/
 ingest_chunk.py
 main.py
 trial.py
+
+Semantic/
+transformer_model/
+embedding_dir/

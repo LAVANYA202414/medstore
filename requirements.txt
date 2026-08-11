@@ -11,3 +11,6 @@ sentence-transformers
 
 # Data
 pandas
+tensorflow
+python-dotenv
+spello

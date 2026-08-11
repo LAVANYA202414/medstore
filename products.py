@@ -13,7 +13,7 @@ app = FastAPI(title="Product Catalog API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:8000", "medstore.codenomad.net", "https://medstore.codenomad.net"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:8000", "https://medstore.codenomad.net"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,7 +106,7 @@ def get_products(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100)
 ):
-    # 1. If product name/slug is mentioned -> return that product detail
+    # If product name/slug is mentioned -> return that product detail
     if product:
         prod_norm = product.strip().lower()
         prod_slug = to_slug(prod_norm)
@@ -127,7 +127,7 @@ def get_products(
 
         return {"error": f"Product '{product}' not found"}
 
-    # 2. If product not mentioned -> filter by category
+    # If product not mentioned -> filter by category
     filtered = all_products
 
     if category:
