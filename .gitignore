@@ -14,3 +14,5 @@ model_cache/
 Semantic/
 embedding_dir/
 tranformer_model/
+
+build_chroma.py

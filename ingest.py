@@ -1,24 +1,73 @@
+# ingest.py - build_chroma as API
 from fastapi import APIRouter
-from langchain_community.document_loaders.csv_loader import CSVLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
+from langchain_chroma import Chroma
+import pandas as pd, re, shutil
+from html import unescape
+from pathlib import Path
 
 router = APIRouter()
 
+BASE = Path(__file__).resolve().parent
+CHROMA_DIR = BASE / "chroma_db"
+CSV_PATH = BASE / "products.csv"
+
+def clean(t):
+    t = unescape(str(t).replace("\\n"," ").replace("\n"," "))
+    t = re.sub(r"<[^>]+>"," ",t)
+    return re.sub(r"\s+"," ",t).strip()[:800]
+
 @router.post("/ingest")
 def ingest_csv():
-    loader = CSVLoader(
-        file_path="/home/lavanya/Desktop/Lavanya/med_store/products.csv",
-        csv_args={'delimiter': ',', 'quotechar': '"'}
-    )
-    documents = loader.load()
+    print(f"1. Reading CSV from {CSV_PATH}...")
+    df = pd.read_csv(CSV_PATH).fillna("")
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = text_splitter.split_documents(documents)
+    if CHROMA_DIR.exists():
+        print(f"Removing old {CHROMA_DIR}")
+        shutil.rmtree(CHROMA_DIR)
 
-    embedding_function = OllamaEmbeddings(model="all-minilm")
+    embed = OllamaEmbeddings(model="all-minilm")
 
-    vector_db = Chroma.from_documents(chunks, embedding_function, persist_directory="./chroma_db")
+    texts, metas = [], []
+    for i, row in df.iterrows():
+        name = str(row.get("Name",""))[:150]
+        cat = clean(str(row.get("Categories",""))[:200])
+        desc = clean(str(row.get("Description",""))[:400])
+        tags = str(row.get("Tags",""))[:100]
 
-    return {"message": f"Success! Ingested {len(chunks)} chunks into './chroma_db'"}
+        text = f"{name} Categories: {cat} Description: {desc} Tags: {tags}"
+        text = text[:600].strip()
+
+        if len(text) < 10:
+            continue
+
+        texts.append(text)
+        metas.append({"row": i})
+
+    print(f"2. Embedding {len(texts)} products to {CHROMA_DIR}...")
+
+    db = None
+    BATCH = 50
+    failed = 0
+    for start in range(0, len(texts), BATCH):
+        end = min(start+BATCH, len(texts))
+        print(f" Batch {start//BATCH+1} : {start}-{end}")
+        try:
+            if db is None:
+                db = Chroma.from_texts(texts=texts[start:end], metadatas=metas[start:end], embedding=embed, persist_directory=str(CHROMA_DIR))
+            else:
+                db.add_texts(texts=texts[start:end], metadatas=metas[start:end])
+        except Exception as e:
+            print(f" FAILED batch {start}-{end}: {e}")
+            failed += 1
+            for j in range(start, end):
+                try:
+                    if db is None:
+                        db = Chroma.from_texts(texts=[texts[j]], metadatas=[metas[j]], embedding=embed, persist_directory=str(CHROMA_DIR))
+                    else:
+                        db.add_texts(texts=[texts[j]], metadatas=[metas[j]])
+                except Exception as ex:
+                    print(f" Skipping row {metas[j]['row']}: {ex}")
+                    continue
+
+    return {"message": f"Success! Ingested {len(texts)-failed} chunks into '{CHROMA_DIR}' with row metadata"}
