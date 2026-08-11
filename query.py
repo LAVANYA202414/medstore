@@ -68,7 +68,6 @@ def is_product_query(user_q: str):
 
     return None
 
-# CHANGED: Swapped .get to .post and integrated the Pydantic request model
 @router.post("/query")
 def ask_rag_bot(request: QueryRequest):
     user_query = request.user_query  # Extracting string from JSON payload
