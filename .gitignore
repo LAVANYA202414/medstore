@@ -5,6 +5,7 @@ __pycache__/
 
 # Ignore old databases
 old_chroma/
+chroma_db
 
 # Ignore local AI model downloads
 model_cache/
