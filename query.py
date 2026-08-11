@@ -13,7 +13,9 @@ class QueryRequest(BaseModel):
     user_query: str
 
 # 1. Database & Embeddings initialized globally (ONCE at startup)
-embedding_function = OllamaEmbeddings(model="nomic-embed-text")
+# embedding_function = OllamaEmbeddings(model="nomic-embed-text")
+embedding_function = OllamaEmbeddings(model="all-minilm")
+
 vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embedding_function)
 
 df = pd.read_csv("products.csv").fillna("")
