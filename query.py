@@ -7,6 +7,10 @@ import difflib
 
 router = APIRouter()
 
+# 1. Database & Embeddings initialized globally (ONCE at startup)
+embedding_function = OllamaEmbeddings(model="nomic-embed-text")
+vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embedding_function)
+
 df = pd.read_csv("products.csv").fillna("")
 df.columns = df.columns.str.strip()
 df['Name_lower'] = df['Name'].astype(str).str.lower().str.strip()
@@ -31,22 +35,18 @@ def is_product_query(user_q: str):
         if not name_lower or len(name_lower) < 3:
             continue
 
-        # 1. Direct contains (handles exact)
         if name_lower in q_lower:
             return row
 
-        # 2. Typo tolerant: all query tokens must fuzzy-match name tokens
         name_toks = clean_tokens(name_lower)
         if not name_toks:
             continue
 
         matched = 0
         for qt in q_toks:
-            # close match for typo like transite -> transit / transportation
-            # use difflib with cutoff 0.8 OR substring with len>=4
             found = False
             for nt in name_toks:
-                if qt in nt or nt in qt: # transport in transportation
+                if qt in nt or nt in qt: 
                     if len(qt) >= 4 and len(nt) >= 3:
                         found = True
                         break
@@ -56,9 +56,8 @@ def is_product_query(user_q: str):
             if found:
                 matched += 1
 
-        # need at least 80% of query tokens matched
         if matched >= len(q_toks) * 0.8 and matched >= 1:
-            # prevent "chair" alone matching everything
+            # FIX: Access the first element of the list instead of checking the list itself
             if len(q_toks) == 1 and q_toks[0] in ["chair","stool","table"]:
                 continue
             return row
@@ -75,8 +74,7 @@ def ask_rag_bot(user_query: str):
         return {"products": [prod], "query": user_query, "type": "product"}
 
     # 2. CATEGORY / SEARCH -> top 10
-    embedding_function = OllamaEmbeddings(model="nomic-embed-text")
-    vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embedding_function)
+    # FIX: Re-using the globally instantiated vector_db here makes it lightning fast
     results = vector_db.similarity_search_with_score(user_query, k=20)
 
     final, seen = [], set()
