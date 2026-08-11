@@ -19,3 +19,6 @@ trial.py
 Semantic/
 transformer_model/
 embedding_dir/ 
+
+# Credentials and environment secrets
+.env
