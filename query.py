@@ -4,8 +4,13 @@ from langchain_ollama import OllamaEmbeddings
 import pandas as pd
 import re
 import difflib
+from pydantic import BaseModel  # Added to define the request body shape
 
 router = APIRouter()
+
+# Define the expected JSON body structure for incoming POST requests
+class QueryRequest(BaseModel):
+    user_query: str
 
 # 1. Database & Embeddings initialized globally (ONCE at startup)
 embedding_function = OllamaEmbeddings(model="nomic-embed-text")
@@ -57,15 +62,17 @@ def is_product_query(user_q: str):
                 matched += 1
 
         if matched >= len(q_toks) * 0.8 and matched >= 1:
-            # FIX: Access the first element of the list instead of checking the list itself
             if len(q_toks) == 1 and q_toks[0] in ["chair","stool","table"]:
                 continue
             return row
 
     return None
 
-@router.get("/query")
-def ask_rag_bot(user_query: str):
+# CHANGED: Swapped .get to .post and integrated the Pydantic request model
+@router.post("/query")
+def ask_rag_bot(request: QueryRequest):
+    user_query = request.user_query  # Extracting string from JSON payload
+
     # 1. PRODUCT?
     prod_row = is_product_query(user_query)
     if prod_row is not None:
@@ -74,7 +81,6 @@ def ask_rag_bot(user_query: str):
         return {"products": [prod], "query": user_query, "type": "product"}
 
     # 2. CATEGORY / SEARCH -> top 10
-    # FIX: Re-using the globally instantiated vector_db here makes it lightning fast
     results = vector_db.similarity_search_with_score(user_query, k=20)
 
     final, seen = [], set()
