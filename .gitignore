@@ -1,25 +1,17 @@
+# Credentials and environment secrets
+.env
+
 # Ignore python environment files and dependencies
 med_store_env/
 __pycache__/
 *.pyc
 
-# Ignore old databases
-old_chroma/
-chroma_db
-
-# Ignore local AI model downloads
-model_cache/
-
-# Ignore original data files and temporary lock sheets
+# Ignore temporary lock sheets
 .~lock.*#
 
-ingest_chunk.py
-main.py
-trial.py
-
+# AI Models, Vector DBs, and Cache folders
+model_cache/
 Semantic/
-transformer_model/
-embedding_dir/ 
-
-# Credentials and environment secrets
-.env
+embedding_dir/
+chroma_db/
+tranformer_model/
