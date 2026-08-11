@@ -5,6 +5,8 @@ import pandas as pd
 import re, difflib, os, traceback, logging
 from pydantic import BaseModel
 from pathlib import Path
+from collections import Counter
+
 
 router = APIRouter()
 
@@ -22,9 +24,10 @@ logger = logging.getLogger("query")
 embedding_function = None
 vector_db = None
 df = None
+TOKEN_PRODUCT_COUNT = None
 
 def get_resources():
-    global embedding_function, vector_db, df
+    global embedding_function, vector_db, df, TOKEN_PRODUCT_COUNT
     if vector_db is not None:
         return embedding_function, vector_db, df
 
@@ -51,6 +54,16 @@ def get_resources():
         _df.columns = _df.columns.str.strip()
         _df['Name_lower'] = _df['Name'].astype(str).str.lower().str.strip()
         df = _df
+
+        TOKEN_PRODUCT_COUNT = Counter()
+        for name in df['Name_lower']:
+            unique_toks = set(clean_tokens(name))
+            for tok in unique_toks:
+                TOKEN_PRODUCT_COUNT[tok] += 1
+            for tok in unique_toks:
+                if tok.endswith('s'):
+                    TOKEN_PRODUCT_COUNT[tok[:-1]] += 1
+
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(tb)
@@ -58,27 +71,74 @@ def get_resources():
 
     return embedding_function, vector_db, df
 
+
 STOP_WORDS = {"price","of","cost","what","is","the","a","an","show","me","give","details","detail","for","in","on","please","tell","about","description","desc","info","information"}
 def clean_tokens(s: str):
     toks = [t.lower() for t in re.findall(r'\w+', s.lower())]
     return [t for t in toks if t not in STOP_WORDS and len(t) >= 3]
 
 def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
-    q_lower = user_q.lower()
+    q_lower = user_q.lower().strip()
     q_toks = clean_tokens(q_lower)
-    if not q_toks: return None
+    if not q_toks:
+        return None
+
+    # --- NEW: If 2+ products contain ALL query tokens, treat as category ---
+    def contains_all(name_lower):
+        for qt in q_toks:
+            qt_root = qt[:-1] if qt.endswith('s') and len(qt)>3 else qt
+            if qt not in name_lower and qt_root not in name_lower:
+                # fuzzy
+                if not any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in clean_tokens(name_lower)):
+                    return False
+        return True
+
+    match_count = df_local['Name_lower'].apply(contains_all).sum()
+    if match_count > 1:
+        return None # -> will go to category search and return ALL
+
+    # --- Single word check ---
+    if len(q_toks) == 1:
+        qt = q_toks[0]
+        count = 0
+        exact_match_row = None
+        for _, row in PRODUCTS_SORTED.iterrows():
+            name_lower = str(row['Name_lower'])
+            if name_lower == q_lower:
+                return row
+            name_toks = clean_tokens(name_lower)
+            if any(qt in nt or nt in qt or difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in name_toks):
+                count += 1
+                if exact_match_row is None:
+                    exact_match_row = row
+            if count > 1:
+                return None
+        if count == 1:
+            return exact_match_row
+        return None
+
+    # --- Multi-word: exact product only ---
     for _, row in PRODUCTS_SORTED.iterrows():
-        name = str(row['Name']).strip()
         name_lower = str(row['Name_lower']).strip()
-        if not name_lower or len(name_lower) < 3: continue
-        if name_lower in q_lower: return row
-        name_toks = clean_tokens(name_lower)
-        if not name_toks: continue
-        matched = sum(1 for qt in q_toks if any((len(qt)>=4 and len(nt)>=3 and (qt in nt or nt in qt)) or difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.8 for nt in name_toks))
-        if matched >= len(q_toks) * 0.8 and matched >= 1:
-            if len(q_toks) == 1 and q_toks[0] in ["chair","stool","table"]: continue
+        if not name_lower:
+            continue
+        # exact match only
+        if name_lower == q_lower:
             return row
+        if name_lower in q_lower and len(q_lower) < len(name_lower) + 10:
+            return row
+
+        name_toks = clean_tokens(name_lower)
+        if not name_toks:
+            continue
+        if len(name_toks) > len(q_toks) + 2:
+            continue
+        matched = sum(1 for qt in q_toks if any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in name_toks))
+        if matched == len(name_toks) and matched == len(q_toks): # exact token match
+            return row
+
     return None
+
 
 @router.post("/query")
 def ask_rag_bot(request: QueryRequest):
@@ -92,24 +152,66 @@ def ask_rag_bot(request: QueryRequest):
             prod.pop('Name_lower', None)
             return {"products": [prod], "query": request.user_query, "type": "product"}
 
+        # --- CATEGORY KEYWORD SEARCH FOR ANY LENGTH ---
+        q_lower = request.user_query.lower().strip()
+        q_toks = clean_tokens(q_lower)
+
+        if q_toks:
+            # find all products where ALL query tokens appear in name
+            def matches(name_lower):
+                for qt in q_toks:
+                    qt_root = qt[:-1] if qt.endswith('s') and len(qt)>3 else qt
+                    if qt not in name_lower and qt_root not in name_lower:
+                        # fuzzy check
+                        if not any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in clean_tokens(name_lower)):
+                            return False
+                return True
+
+            # def matches(row):
+            #     text = f"{row['Name_lower']} {str(row.get('Categories','')).lower()}"
+            #     for qt in q_toks:
+            #         qt_root = qt[:-1] if qt.endswith('s') and len(qt)>3 else qt
+            #         if qt not in text and qt_root not in text:
+            #             if not any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in clean_tokens(text)):
+            #                 return False
+            #     return True
+
+            # mask = df_local.apply(matches, axis=1)
+
+            mask = df_local['Name_lower'].apply(matches)
+            matched_df = df_local[mask]
+
+            if len(matched_df) > 1: # if 2+ products match -> it's a category
+                final, seen = [], set()
+                for _, r in matched_df.iterrows():
+                    name = str(r.get("Name","")).strip().lower()
+                    if name in seen:
+                        continue
+                    d = r.to_dict()
+                    d.pop('Name_lower', None)
+                    final.append(d)
+                    seen.add(name)
+                return {"products": final, "query": request.user_query, "type": "category", "count": len(final)}
+
+        # --- FALLBACK VECTOR SEARCH ---
         results = v_db.similarity_search_with_score(request.user_query, k=20)
         final, seen = [], set()
         for doc, _ in results:
             row_num = doc.metadata.get("row")
             if row_num is None:
-                logger.warning(f"Doc without row: {doc.metadata}")
                 continue
             try:
                 r = df_local.iloc[int(row_num)].to_dict()
-            except Exception as ex:
-                logger.error(f"Row fetch fail {row_num}: {ex}")
+            except Exception:
                 continue
             name = str(r.get("Name","")).strip()
-            if not name or name.lower() in seen: continue
+            if not name or name.lower() in seen:
+                continue
             r.pop('Name_lower', None)
             final.append(r)
             seen.add(name.lower())
-            if len(final) >= 10: break
+            if len(final) >= 10:
+                break
 
         return {"products": final[:10], "query": request.user_query, "type": "category"}
 

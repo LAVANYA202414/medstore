@@ -3,6 +3,7 @@
 
 # Ignore python environment files and dependencies
 med_store_env/
+medical_store_env
 __pycache__/
 *.pyc
 
