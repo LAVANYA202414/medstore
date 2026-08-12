@@ -170,8 +170,25 @@ def get_products(
 def get_categories():
     tree = {}
     for cell in df["Categories"]:
+        if not cell or str(cell).strip() == "":
+            continue
         for path in [p.strip() for p in str(cell).split(",") if p.strip()]:
-            parts = [p.strip() for p in path.split(">")]
+            # FILTER: ignore pure numbers like 0, 1, 199, 350
+            # and ignore paths that don't contain any letter
+            if path.isdigit():
+                continue
+            if not re.search(r'[a-zA-Z]', path):
+                continue
+            # Also skip if path looks like a price (e.g., "350")
+            if re.fullmatch(r'\d+(\.\d+)?', path.strip()):
+                continue
+
+            parts = [p.strip() for p in path.split(">") if p.strip()]
+            # Clean parts - remove numeric parts
+            parts = [p for p in parts if not p.isdigit() and re.search(r'[a-zA-Z]', p)]
+            if not parts:
+                continue
+
             node = tree
             for part in parts:
                 node = node.setdefault(part, {})
@@ -179,11 +196,16 @@ def get_categories():
     def build(node):
         out = []
         for name, child in sorted(node.items()):
+            # Double filter at build time
+            if name.isdigit():
+                continue
+            if not re.search(r'[a-zA-Z]', name):
+                continue
             out.append({
                 "id": to_slug(name),
                 "name": name,
                 "slug": to_slug(name),
-                "subcategories": sorted(child.keys()), # simple list
+                "subcategories": sorted(child.keys()),
                 "children": build(child)
             })
         return out
