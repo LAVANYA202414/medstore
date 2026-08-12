@@ -8,7 +8,6 @@ import ingest
 import query
 from html import unescape
 
-
 app = FastAPI(title="Product Catalog API")
 
 app.add_middleware(
@@ -22,22 +21,16 @@ app.add_middleware(
 def strip_html(text: str) -> str:
     if not text:
         return ""
-    # decode &deg; &amp; etc
     text = unescape(text)
-    # remove <p> <br> etc
     text = re.sub(r'<[^>]+>', ' ', text)
-    # clean extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
     return text
-
 
 def to_slug(s):
     return re.sub(r'[^a-z0-9]+', '-', str(s).lower()).strip('-')
 
-
 def normalize(text: str):
     return " > ".join([p.strip().lower() for p in str(text).split(">")]).strip()
-
 
 def get_primary_path(categories_str: str):
     paths = [p.strip() for p in str(categories_str).split(",") if p.strip()]
@@ -45,7 +38,6 @@ def get_primary_path(categories_str: str):
         return "uncategorized"
     paths = sorted(paths, key=lambda x: x.count(">"), reverse=True)
     return paths[0]
-
 
 df = pd.read_csv("products.csv").fillna("")
 df.columns = df.columns.str.strip()
@@ -98,7 +90,6 @@ for _, row in df.iterrows():
     })
     counter += 1
 
-
 @app.get("/products")
 def get_products(
     category: Optional[str] = Query(None),
@@ -106,30 +97,71 @@ def get_products(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100)
 ):
-    # If product name/slug is mentioned -> return that product detail
+    # If product name/slug is mentioned
     if product:
         prod_norm = product.strip().lower()
         prod_slug = to_slug(prod_norm)
+        prod_root = prod_norm[:-1] if prod_norm.endswith('s') and len(prod_norm) > 3 else prod_norm
+        prod_tokens = [t for t in re.findall(r'\w+', prod_norm) if len(t) >= 3]
 
+        matched = []
         for p in all_products:
-            if p["name"].lower() == prod_norm or p["slug"] == prod_slug or p["slug"] == prod_norm:
+            name_lower = p["name"].lower()
+            raw_cats = p["_raw_categories"]
+
+            def contains_all(text):
+                for qt in prod_tokens:
+                    qt_root = qt[:-1] if qt.endswith('s') and len(qt) > 3 else qt
+                    if qt not in text and qt_root not in text:
+                        return False
+                return True
+
+            is_match = False
+
+            # 1. Check product name
+            if contains_all(name_lower):
+                is_match = True
+
+            # 2. Check each category path separately
+            if not is_match:
+                for path in raw_cats.split(","):
+                    if contains_all(path.lower()):
+                        is_match = True
+                        break
+
+            # 3. Fallback: check slug
+            if not is_match:
+                if prod_norm in p["slug"] or prod_root in p["slug"] or prod_slug in p["slug"]:
+                    is_match = True
+
+            if is_match:
                 clean = {k: v for k, v in p.items() if not k.startswith("_")}
                 clean["description"] = strip_html(clean["description"])
                 clean["longDescription"] = strip_html(clean["longDescription"])
-                return clean
+                matched.append(clean)
 
-        for p in all_products:
-            if prod_norm in p["name"].lower() or prod_norm in p["slug"]:
-                clean = {k: v for k, v in p.items() if not k.startswith("_")}
-                clean["description"] = strip_html(clean["description"])
-                clean["longDescription"] = strip_html(clean["longDescription"])
-                return clean
+        if not matched:
+            return {"error": f"Product '{product}' not found"}
 
-        return {"error": f"Product '{product}' not found"}
+        if len(matched) == 1:
+            return matched[0]
 
-    # If product not mentioned -> filter by category
+        total_items = len(matched)
+        total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
+        start = (page - 1) * limit
+        paginated = matched[start:start+limit]
+
+        return {
+            "metadata": {
+                "total_items": total_items,
+                "total_pages": total_pages,
+                "current_page": page,
+                "limit": limit
+            },
+            "products": paginated
+        }
+
     filtered = all_products
-
     if category:
         cat_norm = normalize(category).lower()
         new_list = []
@@ -150,7 +182,6 @@ def get_products(
     result = []
     for p in paginated:
         clean = {k: v for k, v in p.items() if not k.startswith("_")}
-        # ONLY CLEAN WHILE SENDING RESPONSE
         clean["description"] = strip_html(clean["description"])
         clean["longDescription"] = strip_html(clean["longDescription"])
         result.append(clean)
@@ -165,7 +196,6 @@ def get_products(
         "products": result
     }
 
-
 @app.get("/categories")
 def get_categories():
     tree = {}
@@ -173,18 +203,14 @@ def get_categories():
         if not cell or str(cell).strip() == "":
             continue
         for path in [p.strip() for p in str(cell).split(",") if p.strip()]:
-            # FILTER: ignore pure numbers like 0, 1, 199, 350
-            # and ignore paths that don't contain any letter
             if path.isdigit():
                 continue
             if not re.search(r'[a-zA-Z]', path):
                 continue
-            # Also skip if path looks like a price (e.g., "350")
             if re.fullmatch(r'\d+(\.\d+)?', path.strip()):
                 continue
 
             parts = [p.strip() for p in path.split(">") if p.strip()]
-            # Clean parts - remove numeric parts
             parts = [p for p in parts if not p.isdigit() and re.search(r'[a-zA-Z]', p)]
             if not parts:
                 continue
@@ -196,7 +222,6 @@ def get_categories():
     def build(node):
         out = []
         for name, child in sorted(node.items()):
-            # Double filter at build time
             if name.isdigit():
                 continue
             if not re.search(r'[a-zA-Z]', name):
