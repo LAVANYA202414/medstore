@@ -16,4 +16,12 @@ python-dotenv
 spello
 
 
-langchain-ollamac
+langchain-ollama
+
+sqlalchemy
+mysql-connector-python
+
+bcrypt
+passlib
+
+pyjwt
