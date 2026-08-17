@@ -2,7 +2,9 @@ import os
 import jwt
 import models
 from database import get_db
+from pydantic import EmailStr
 from dotenv import load_dotenv
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
@@ -20,12 +22,22 @@ ALGORITHM = "HS256"
 
 security = HTTPBearer()
 
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
 @router.post("/login")
-def login(email: str, password: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == email).first()
+# Use the model as a parameter in your function
+def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+    # 3. Access the values using login_data.email and login_data.password
+    user = db.query(models.User).filter(models.User.email == login_data.email).first()
+    
     # Check the password:
-    if not user or not pwd_context.verify(password, user.password_hash):
+    if not user or not pwd_context.verify(login_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+        
     # Check if account is active:
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User deactivated")
@@ -40,6 +52,7 @@ def login(email: str, password: str, db: Session = Depends(get_db)):
         "exp": datetime.utcnow() + timedelta(hours=12)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    
     # Give the pass to the user:
     return {"access_token": token, "token_type": "bearer", "is_admin": user.is_admin}
 
