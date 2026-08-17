@@ -265,23 +265,13 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
 
     cat_paths = [get_path(c) for c in p.categories]
 
-    # NEW: last category logic
-    leafIds = []
-    leafNames = []
-    allCategoryPaths = []
-
-    for path in cat_paths:
-        parts = [s.strip() for s in path.split(">") if s.strip()]
-        if not parts:
-            continue
-
-        allCategoryPaths.append(path)
-        leaf = parts[-1] # LAST - works for both "Emergency" and "Emergency > Rescue"
-        leaf_slug = to_slug(leaf)
-
-        if leaf_slug not in leafIds:
-            leafIds.append(leaf_slug)
-            leafNames.append(leaf)
+    if not cat_paths:
+        leafIds, leafNames = [], []
+    else:
+        last_path = cat_paths[-1]
+        last_part = last_path.split(">")[-1].strip() # last after last >
+        leafIds = [to_slug(last_part)]
+        leafNames = [last_part]
 
     try:
         price = float(p.regular_price or p.sale_price or 0)
@@ -294,9 +284,8 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "slug": p.slug or to_slug(p.name),
         "description": strip_html(p.short_description or (p.description or "")[:150]),
         "longDescription": strip_html(p.description or ""),
-        "categoryId": leafIds,
+        "categoryId": leafIds, # ["rescue"] or ["respiratory-airways"]
         "categoryName": leafNames,
-        # "allCategories": allCategoryPaths,
         "price": price,
         "brand": p.brand or "Generic",
         "inStock": bool(p.in_stock),
