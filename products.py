@@ -261,7 +261,11 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
 
     p = db.query(models.Product).options(joinedload(models.Product.categories)).filter(models.Product.id == product_id).first()
     if not p:
-        return {"error": f"Product {product_id} not found"}
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+
+    # HIDE IF NOT PUBLISHED
+    if not p.published:
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found or is deactivated")
 
     cat_paths = [get_path(c) for c in p.categories]
 
@@ -269,7 +273,7 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         leafIds, leafNames = [], []
     else:
         last_path = cat_paths[-1]
-        last_part = last_path.split(">")[-1].strip() # last after last >
+        last_part = last_path.split(">")[-1].strip()
         leafIds = [to_slug(last_part)]
         leafNames = [last_part]
 
@@ -284,11 +288,12 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "slug": p.slug or to_slug(p.name),
         "description": strip_html(p.short_description or (p.description or "")[:150]),
         "longDescription": strip_html(p.description or ""),
-        "categoryId": leafIds, # ["rescue"] or ["respiratory-airways"]
+        "categoryId": leafIds,
         "categoryName": leafNames,
         "price": price,
         "brand": p.brand or "Generic",
         "inStock": bool(p.in_stock),
+        "published": p.published,
         "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
     }
@@ -392,3 +397,42 @@ def update_product(product_id: int, payload: ProductUpdate, db: Session = Depend
     db.commit()
     db.refresh(product)
     return {"message": "Product updated", "id": product.id}
+
+
+# --- DEACTIVATE (make unpublished) ---
+@router.patch("/products/{product_id}/deactivate")
+def deactivate_product(product_id: int, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    product.published = False
+    db.commit()
+    db.refresh(product)
+    return {"message": f"Product {product_id} deactivated", "id": product.id, "published": product.published}
+
+
+# --- ACTIVATE (make published again) ---
+# @router.patch("/products/{product_id}/activate")
+# def activate_product(product_id: int, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
+#     product = db.query(models.Product).filter(models.Product.id == product_id).first()
+#     if not product:
+#         raise HTTPException(status_code=404, detail="Product not found")
+    
+#     product.published = True
+#     db.commit()
+#     db.refresh(product)
+#     return {"message": f"Product {product_id} activated", "id": product.id, "published": product.published}
+
+# # --- TOGGLE (one endpoint for both) ---
+# @router.patch("/products/{product_id}/toggle-publish")
+# def toggle_publish(product_id: int, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
+#     product = db.query(models.Product).filter(models.Product.id == product_id).first()
+#     if not product:
+#         raise HTTPException(status_code=404, detail="Product not found")
+    
+#     product.published = not product.published
+#     db.commit()
+#     db.refresh(product)
+#     status_text = "activated" if product.published else "deactivated"
+#     return {"message": f"Product {product_id} {status_text}", "id": product.id, "published": product.published}
