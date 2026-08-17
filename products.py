@@ -245,6 +245,7 @@ def get_categories(db: Session = Depends(get_db)):
 
     return build_tree(None)
 
+
 @router.get("/products/{product_id}")
 def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     all_cats = db.query(models.Category).all()
@@ -261,14 +262,38 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     p = db.query(models.Product).options(joinedload(models.Product.categories)).filter(models.Product.id == product_id).first()
     if not p:
         return {"error": f"Product {product_id} not found"}
-    
-    # get all category text paths
+
     cat_paths = [get_path(c) for c in p.categories]
-    # pick the primary category chain
-    primary = cat_paths[0] if cat_paths else "uncategorized"
-    parts = [s.strip() for s in primary.split(">")]
-    top = parts[0] if len(parts) > 0 else "uncategorized"
-    sub = parts[1] if len(parts) > 1 else ""
+
+    categoryIds = []
+    categoryNames = []
+    subcategoryIds = []
+    subcategoryNames = []
+    allCategoryPaths = []
+
+    for path in cat_paths:
+        parts = [s.strip() for s in path.split(">")]
+        if not parts[0]:
+            continue
+        top = parts[0]
+        sub = parts[1] if len(parts) > 1 else ""
+
+        allCategoryPaths.append(path)
+
+        top_slug = to_slug(top)
+        if top_slug not in categoryIds:
+            categoryIds.append(top_slug)
+            categoryNames.append(top)
+
+        if sub:
+            sub_slug = to_slug(sub)
+            if sub_slug not in subcategoryIds:
+                subcategoryIds.append(sub_slug)
+                subcategoryNames.append(sub)
+
+    # primary for old compatibility
+    primary = sorted(cat_paths, key=lambda x: x.count(">"), reverse=True)[0] if cat_paths else "uncategorized"
+
     try:
         price = float(p.regular_price or p.sale_price or 0)
     except:
@@ -280,17 +305,19 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "slug": p.slug or to_slug(p.name),
         "description": strip_html(p.short_description or (p.description or "")[:150]),
         "longDescription": strip_html(p.description or ""),
-        "categoryId": to_slug(top),
-        "subcategoryId": to_slug(sub) if sub else "",
-        "categoryName": top,
-        "subcategoryName": sub,
+        "categoryId": subcategoryIds,
+        "categoryName": subcategoryNames,
+        # "subcategoryId": subcategoryIds,
+        # "subcategoryName": subcategoryNames,
+        # "allCategories": allCategoryPaths,
+        # "primaryCategoryId": to_slug(primary.split(">")[0].strip()) if primary else "",
+        # "primaryCategoryName": primary.split(">")[0].strip() if primary else "",
         "price": price,
         "brand": p.brand or "Generic",
         "inStock": bool(p.in_stock),
         "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
     }
-
 
 # New Product Data
 class ProductCreate(BaseModel):
@@ -311,7 +338,7 @@ class ProductCreate(BaseModel):
 
 
 # --- CREATE ---
-@router.post("/products", status_code=status.HTTP_201_CREATED)
+@router.post("/create-products", status_code=status.HTTP_201_CREATED)
 def create_product(payload: ProductCreate, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
     # check duplicate slug
     slug = payload.slug or to_slug(payload.name)
@@ -347,6 +374,7 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db), admin 
     return {"message": "Product created", "id": new_product.id, "slug": new_product.slug}
 
 
+# New Updated Data
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     slug: Optional[str] = None
@@ -367,10 +395,11 @@ class ProductUpdate(BaseModel):
 # --- UPDATE ---
 @router.put("/products/{product_id}")
 def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
+    # Check if the product exists
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-
+    # retype unchanged details
     update_data = payload.dict(exclude_unset=True)
 
     if "category_ids" in update_data:

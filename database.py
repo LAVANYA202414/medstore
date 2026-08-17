@@ -1,6 +1,9 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # CHANGE THIS to your credentials
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:Mysql123!@localhost:3306/medstore_db")

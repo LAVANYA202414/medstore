@@ -11,7 +11,6 @@ sentence-transformers
 
 # Data
 pandas
-tensorflow
 python-dotenv
 spello
 
@@ -25,3 +24,5 @@ bcrypt
 passlib
 
 pyjwt
+pymysql
+jwt
