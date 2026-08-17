@@ -265,34 +265,23 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
 
     cat_paths = [get_path(c) for c in p.categories]
 
-    categoryIds = []
-    categoryNames = []
-    subcategoryIds = []
-    subcategoryNames = []
+    # NEW: last category logic
+    leafIds = []
+    leafNames = []
     allCategoryPaths = []
 
     for path in cat_paths:
-        parts = [s.strip() for s in path.split(">")]
-        if not parts[0]:
+        parts = [s.strip() for s in path.split(">") if s.strip()]
+        if not parts:
             continue
-        top = parts[0]
-        sub = parts[1] if len(parts) > 1 else ""
 
         allCategoryPaths.append(path)
+        leaf = parts[-1] # LAST - works for both "Emergency" and "Emergency > Rescue"
+        leaf_slug = to_slug(leaf)
 
-        top_slug = to_slug(top)
-        if top_slug not in categoryIds:
-            categoryIds.append(top_slug)
-            categoryNames.append(top)
-
-        if sub:
-            sub_slug = to_slug(sub)
-            if sub_slug not in subcategoryIds:
-                subcategoryIds.append(sub_slug)
-                subcategoryNames.append(sub)
-
-    # primary for old compatibility
-    primary = sorted(cat_paths, key=lambda x: x.count(">"), reverse=True)[0] if cat_paths else "uncategorized"
+        if leaf_slug not in leafIds:
+            leafIds.append(leaf_slug)
+            leafNames.append(leaf)
 
     try:
         price = float(p.regular_price or p.sale_price or 0)
@@ -305,19 +294,16 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "slug": p.slug or to_slug(p.name),
         "description": strip_html(p.short_description or (p.description or "")[:150]),
         "longDescription": strip_html(p.description or ""),
-        "categoryId": subcategoryIds,
-        "categoryName": subcategoryNames,
-        # "subcategoryId": subcategoryIds,
-        # "subcategoryName": subcategoryNames,
+        "categoryId": leafIds,
+        "categoryName": leafNames,
         # "allCategories": allCategoryPaths,
-        # "primaryCategoryId": to_slug(primary.split(">")[0].strip()) if primary else "",
-        # "primaryCategoryName": primary.split(">")[0].strip() if primary else "",
         "price": price,
         "brand": p.brand or "Generic",
         "inStock": bool(p.in_stock),
         "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
     }
+
 
 # New Product Data
 class ProductCreate(BaseModel):
