@@ -183,7 +183,7 @@ def get_products(
 
     total_items = base_q.count()
     total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
-    db_products = base_q.offset((page-1)*limit).limit(limit).all()
+    db_products = base_q.options(joinedload(models.Product.categories)).offset((page-1)*limit).limit(limit).all()
 
     result = []
     for p in db_products:
