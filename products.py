@@ -3,7 +3,7 @@ import math
 import models
 from typing import List
 from html import unescape
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from fastapi import status
 from database import get_db
 from typing import Optional
@@ -56,7 +56,7 @@ def get_products(
 
     base_q = db.query(models.Product).options(joinedload(models.Product.categories)).filter(
         models.Product.published == True,
-        models.Product.visibility == True # only visible
+        models.Product.visibility == True
     )
 
     # === If searching by product name/slug ===
@@ -150,26 +150,23 @@ def get_products(
         total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
         start = (page - 1) * limit
         paginated = matched[start:start+limit]
-        # strip _raw for response
         paginated = [{k: v for k, v in p.items() if not k.startswith("_")} for p in paginated]
         return {
             "metadata": {"total_items": total_items, "total_pages": total_pages, "current_page": page, "limit": limit},
             "products": paginated
         }
 
-    # === Category filter (NOW FROM DB) ===
+    # === Category filter ===
+    matching_cat_ids = set()  #defined here so count_q can always reference it
     if category:
         cat_norm = normalize(category).lower()
-        matching_cat_ids = set()
         for c in all_cats:
             path = get_path(c).lower()
             parts = [s.strip() for s in path.split(">")]
             if cat_norm == path or cat_norm in parts or f" > {cat_norm}" in path or f"{cat_norm} >" in path or cat_norm == c.name.lower() or cat_norm == c.slug.lower():
                 matching_cat_ids.add(c.id)
 
-        # include descendants of matched categories
         if matching_cat_ids:
-            # expand to descendants
             to_process = list(matching_cat_ids)
             while to_process:
                 parent_id = to_process.pop()
@@ -181,9 +178,20 @@ def get_products(
         else:
             return {"metadata": {"total_items": 0, "total_pages": 1, "current_page": page, "limit": limit}, "products": []}
 
-    total_items = base_q.count()
+    # Separate count query without joinedload to avoid SQLAlchemy InvalidRequestError
+    count_q = db.query(func.count(models.Product.id)).filter(
+        models.Product.published == True,
+        models.Product.visibility == True
+    )
+    if matching_cat_ids:
+        count_q = count_q.filter(
+            models.Product.categories.any(models.Category.id.in_(matching_cat_ids))
+        )
+    total_items = count_q.scalar()
+
     total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
-    db_products = base_q.options(joinedload(models.Product.categories)).offset((page-1)*limit).limit(limit).all()
+
+    db_products = base_q.offset((page - 1) * limit).limit(limit).all()
 
     result = []
     for p in db_products:
