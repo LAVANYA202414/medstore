@@ -302,8 +302,8 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "slug": p.slug or to_slug(p.name),
         "description": strip_html(p.short_description or (p.description or "")[:150]),
         "longDescription": strip_html(p.description or ""),
-        "categoryId": leafIds, # <-- only last leaf id
-        "categoryName": leafNames, # <-- only last leaf name
+        "categoryId": leafIds,
+        "categoryName": leafNames,
         "price": price,
         "brand": p.brand or "Generic",
         "inStock": bool(p.in_stock),

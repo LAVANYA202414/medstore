@@ -14,6 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Routing
 # app.include_router(ingest.router)
 app.include_router(query.router)
 app.include_router(products.router)
