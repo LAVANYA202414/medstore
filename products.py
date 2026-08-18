@@ -299,21 +299,18 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     return {
         "id": p.id,
         "name": p.name,
-        "slug": p.slug,
-        "short_description": p.short_description,
-        "description": p.description,
-        "regular_price": p.regular_price,
-        "sale_price": p.sale_price,
-        "in_stock": p.in_stock,
+        "slug": p.slug or to_slug(p.name),
+        "description": strip_html(p.short_description or (p.description or "")[:150]),
+        "longDescription": strip_html(p.description or ""),
+        "categoryId": leafIds, # <-- only last leaf id
+        "categoryName": leafNames, # <-- only last leaf name
+        "price": price,
+        "brand": p.brand or "Generic",
+        "inStock": bool(p.in_stock),
         "published": p.published,
-        "visibility": p.visibility,
-        "is_featured": p.is_featured,
-        "brand": p.brand,
-        "model": p.model,
-        "images": p.images,
-        "tags": p.tags,
-        "category_ids": [c.id for c in p.categories],
-        "categories": [c.id for c in p.categories]}
+        "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
+        "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
+    }
 
 
 @router.get("/admin/products")
@@ -451,7 +448,8 @@ class ProductUpdate(BaseModel):
     class Config:
         extra = "ignore"
 
-# --- UPDATE - Partial update, only sent fields will change ---
+    
+# --- UPDATE ---
 @router.patch("/products/{product_id}")
 def update_product(
     product_id: int,
@@ -504,10 +502,13 @@ def activate_product(
     product_id: int,
     db: Session = Depends(get_db),
     admin=Depends(get_current_admin)):
+    
+    # Search product by id in database.
     product = (db.query(models.Product).filter(models.Product.id == product_id).first())
     if not product:
         raise HTTPException(status_code=404,detail="Product not found")
 
+    # Set the published status to True to show it to shoppers again
     product.published = True
     db.commit()
     db.refresh(product)
@@ -526,9 +527,11 @@ def deactivate_product(
     product_id: int,
     db: Session = Depends(get_db),
     admin=Depends(get_current_admin)):
+    # Search product by id
     product = (db.query(models.Product).filter(models.Product.id == product_id).first())
     if not product:raise HTTPException(status_code=404,detail="Product not found")
 
+    # Set the published status to False to hide it from shoppers
     product.published = False
     db.commit()
     db.refresh(product)
@@ -541,6 +544,7 @@ def deactivate_product(
     }
 
 
+# --- CREATE CATEGORY ---
 class CategoryCreate(BaseModel):
     name: str
     slug: Optional[str] = None
@@ -550,12 +554,12 @@ class CategoryCreate(BaseModel):
 @router.post("/create-category", status_code=status.HTTP_201_CREATED)
 def create_category(payload: CategoryCreate,db: Session = Depends(get_db),admin=Depends(get_current_admin)):
 
-    # Clean category name
+    # Remove extra spaces from the category name
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400,detail="Category name is required")
 
-    # Generate slug if not provided
+    # Use the provided web URL slug or create one automatically from the name
     slug = payload.slug.strip().lower() if payload.slug else to_slug(name)
 
     # Check duplicate name
@@ -581,6 +585,7 @@ def create_category(payload: CategoryCreate,db: Session = Depends(get_db),admin=
     # Create category
     new_category = models.Category(name=name,slug=slug,parent_id=payload.parent_id)
 
+    # Stage, save, and reload the new category inside the database
     db.add(new_category)
     db.commit()
     db.refresh(new_category)
