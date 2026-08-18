@@ -12,7 +12,9 @@ from fastapi import Query, APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 from auth import *
 
+
 router = APIRouter()
+
 
 def strip_html(text: str) -> str:
     if not text:
@@ -22,11 +24,14 @@ def strip_html(text: str) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
+
 def to_slug(s):
     return re.sub(r'[^a-z0-9]+', '-', str(s).lower()).strip('-')
 
+
 def normalize(text: str):
     return " > ".join([p.strip().lower() for p in str(text).split(">")]).strip()
+
 
 @router.get("/products")
 def get_products(
@@ -49,7 +54,10 @@ def get_products(
             curr = all_cats_map.get(curr.parent_id) if curr.parent_id else None
         return " > ".join(reversed(parts))
 
-    base_q = db.query(models.Product).options(joinedload(models.Product.categories)).filter(models.Product.published == True)
+    base_q = db.query(models.Product).options(joinedload(models.Product.categories)).filter(
+        models.Product.published == True,
+        models.Product.visibility == True # only visible
+    )
 
     # === If searching by product name/slug ===
     if product:
@@ -103,10 +111,14 @@ def get_products(
                 if not short_desc:
                     short_desc = (p.description or "")[:150]
 
-                primary = cat_paths[0] if cat_paths else "uncategorized"
-                parts = [s.strip() for s in primary.split(">")]
-                top = parts[0] if len(parts) > 0 else "uncategorized"
-                sub = parts[1] if len(parts) > 1 else ""
+                if cat_paths:
+                    last_path = cat_paths[-1]
+                    last_part = last_path.split(">")[-1].strip()
+                    cat_id = to_slug(last_part)
+                    cat_name = last_part
+                else:
+                    cat_id = "uncategorized"
+                    cat_name = "Uncategorized"
 
                 matched.append({
                     "id": p.id,
@@ -114,16 +126,14 @@ def get_products(
                     "slug": p.slug or to_slug(p.name),
                     "description": strip_html(short_desc),
                     "longDescription": strip_html(p.description or ""),
-                    "categoryId": to_slug(top),
-                    "subcategoryId": to_slug(sub) if sub else "",
-                    "categoryName": top,
-                    "subcategoryName": sub,
+                    "categoryId": [cat_id],
+                    "categoryName": [cat_name],
                     "price": price,
                     "brand": p.brand or "Generic",
                     "inStock": bool(p.in_stock),
                     "rating": 4.5,
                     "tint": "#dceef7",
-                    "icon": to_slug(sub).split('-')[0] if sub else to_slug(top).split('-')[0],
+                    "icon": cat_id.split('-')[0],
                     "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
                     "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
                     "specifications": {"Model": p.model or ""},
@@ -216,7 +226,8 @@ def get_products(
         "products": result
     }
 
-@router.get("/categories")
+
+@router.get("/get-categories")
 def get_categories(db: Session = Depends(get_db)):
     all_cats = db.query(models.Category).all()
     children_map = {}
@@ -246,7 +257,7 @@ def get_categories(db: Session = Depends(get_db)):
     return build_tree(None)
 
 
-@router.get("/products/{product_id}")
+@router.get("/get-product/{product_id}")
 def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
@@ -262,6 +273,13 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     p = db.query(models.Product).options(joinedload(models.Product.categories)).filter(models.Product.id == product_id).first()
     if not p:
         return {"error": f"Product {product_id} not found"}
+
+    if not p.published:
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found...")
+
+    # hide if no visibility
+    if not getattr(p, 'visibility', None):
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found - no visibility")
 
     cat_paths = [get_path(c) for c in p.categories]
 
@@ -281,17 +299,77 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     return {
         "id": p.id,
         "name": p.name,
-        "slug": p.slug or to_slug(p.name),
-        "description": strip_html(p.short_description or (p.description or "")[:150]),
-        "longDescription": strip_html(p.description or ""),
-        "categoryId": leafIds,
-        "categoryName": leafNames,
-        "price": price,
-        "brand": p.brand or "Generic",
-        "inStock": bool(p.in_stock),
+        "slug": p.slug,
+        "short_description": p.short_description,
+        "description": p.description,
+        "regular_price": p.regular_price,
+        "sale_price": p.sale_price,
+        "in_stock": p.in_stock,
         "published": p.published,
-        "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
-        "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
+        "visibility": p.visibility,
+        "is_featured": p.is_featured,
+        "brand": p.brand,
+        "model": p.model,
+        "images": p.images,
+        "tags": p.tags,
+        "category_ids": [c.id for c in p.categories],
+        "categories": [c.id for c in p.categories]}
+
+
+@router.get("/admin/products")
+def get_admin_products(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)):
+    query = (
+        db.query(models.Product)
+        .options(joinedload(models.Product.categories)))
+    total_items = query.count()
+    total_pages = math.ceil(total_items / limit) if total_items else 1
+
+    products = (
+        query
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all())
+
+    result = []
+    for p in products:
+        try:
+            price = float(p.regular_price or p.sale_price or 0)
+        except:
+            price = 0
+        result.append({
+            "id": p.id,
+            "name": p.name,
+            "slug": p.slug or to_slug(p.name),
+            "price": price,
+            "brand": p.brand or "Generic",
+            "inStock": bool(p.in_stock),
+            "published": bool(p.published),
+            "visibility": bool(p.visibility),
+            "is_featured": bool(p.is_featured),
+            "image": (
+                p.images.split(",")[0].strip()
+                if p.images
+                else "/products/placeholder.png"
+            ),
+            "tags": [
+                t.strip()
+                for t in str(p.tags or "").split(",")
+                if t.strip()
+            ][:5],
+        })
+
+    return {
+        "metadata": {
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "current_page": page,
+            "limit": limit,
+        },
+        "products": result,
     }
 
 
@@ -306,6 +384,7 @@ class ProductCreate(BaseModel):
     in_stock: bool = True
     is_featured: bool = False
     published: bool = True
+    visibility: bool = True
     brand: str = "Generic"
     model: Optional[str] = ""
     images: Optional[str] = ""
@@ -338,6 +417,7 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db), admin 
         in_stock=payload.in_stock,
         is_featured=payload.is_featured,
         published=payload.published,
+        visibility = payload.visibility,
         brand=payload.brand,
         model=payload.model,
         images=payload.images,
@@ -359,37 +439,158 @@ class ProductUpdate(BaseModel):
     regular_price: Optional[float] = None
     sale_price: Optional[float] = None
     in_stock: Optional[bool] = None
-    is_featured: Optional[bool] = None
     published: Optional[bool] = None
+    visibility: Optional[bool] = None
+    is_featured: Optional[bool] = None
     brand: Optional[str] = None
     model: Optional[str] = None
     images: Optional[str] = None
     tags: Optional[str] = None
     category_ids: Optional[List[int]] = None
 
+    class Config:
+        extra = "ignore"
 
-# --- UPDATE ---
-@router.put("/products/{product_id}")
-def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
-    # Check if the product exists
+# --- UPDATE - Partial update, only sent fields will change ---
+@router.patch("/products/{product_id}")
+def update_product(
+    product_id: int,
+    payload: ProductUpdate,
+    db: Session = Depends(get_db),
+    admin = Depends(get_current_admin)
+):
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    # retype unchanged details
-    update_data = payload.dict(exclude_unset=True)
+        raise HTTPException(404, "Product not found")
+
+    update_data = payload.model_dump(exclude_unset=True)  # ONLY sent fields
+
+    if not update_data:
+        raise HTTPException(400, "No fields to update")
 
     if "category_ids" in update_data:
         cat_ids = update_data.pop("category_ids")
         if cat_ids is not None:
             categories = db.query(models.Category).filter(models.Category.id.in_(cat_ids)).all()
+            if len(categories) != len(cat_ids):
+                raise HTTPException(400, "category not found")
             product.categories = categories
 
     for key, value in update_data.items():
-        if key == "name" and value and not payload.slug:
-            # auto update slug if name changed and slug not provided
-            setattr(product, "slug", to_slug(value))
         setattr(product, key, value)
+
+    if "name" in update_data and "slug" not in update_data:
+        product.slug = to_slug(update_data["name"])
 
     db.commit()
     db.refresh(product)
-    return {"message": "Product updated", "id": product.id}
+    return {"message": "Product updated successfully", "id": product.id, "updated_fields": list(update_data.keys())}
+
+
+# # --- DELETE ---
+# @router.delete("/products/{product_id}")
+# def delete_product(product_id: int, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
+#     product = db.query(models.Product).filter(models.Product.id == product_id).first()
+#     if not product:
+#         raise HTTPException(status_code=404, detail="Product not found")
+#     db.delete(product)
+#     db.commit()
+#     return {"message": f"Product {product_id} deleted"}
+
+
+# --- ACTIVATE PRODUCT ---
+@router.patch("/products/{product_id}/activate")
+def activate_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)):
+    product = (db.query(models.Product).filter(models.Product.id == product_id).first())
+    if not product:
+        raise HTTPException(status_code=404,detail="Product not found")
+
+    product.published = True
+    db.commit()
+    db.refresh(product)
+
+    return {
+        "message": "Product activated successfully",
+        "id": product.id,
+        "name": product.name,
+        "published": product.published
+    }
+
+
+# --- DEACTIVATE PRODUCT ---
+@router.patch("/products/{product_id}/deactivate")
+def deactivate_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)):
+    product = (db.query(models.Product).filter(models.Product.id == product_id).first())
+    if not product:raise HTTPException(status_code=404,detail="Product not found")
+
+    product.published = False
+    db.commit()
+    db.refresh(product)
+
+    return {
+        "message": "Product deactivated successfully",
+        "id": product.id,
+        "name": product.name,
+        "published": product.published
+    }
+
+
+class CategoryCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    parent_id: Optional[int] = None
+
+
+@router.post("/create-category", status_code=status.HTTP_201_CREATED)
+def create_category(payload: CategoryCreate,db: Session = Depends(get_db),admin=Depends(get_current_admin)):
+
+    # Clean category name
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400,detail="Category name is required")
+
+    # Generate slug if not provided
+    slug = payload.slug.strip().lower() if payload.slug else to_slug(name)
+
+    # Check duplicate name
+    existing_name = (db.query(models.Category).filter(models.Category.name.ilike(name)).first())
+    if existing_name:
+        raise HTTPException(status_code=400,detail="Category with this name already exists")
+
+    # Check duplicate slug
+    existing_slug = (db.query(models.Category).filter(models.Category.slug == slug).first())
+    if existing_slug:
+        raise HTTPException(status_code=400,detail="Category with this slug already exists")
+
+    # If parent_id is provided, verify parent exists
+    parent = None
+    if payload.parent_id is not None:
+        parent = (
+            db.query(models.Category)
+            .filter(models.Category.id == payload.parent_id)
+            .first())
+        if not parent:
+            raise HTTPException(status_code=404,detail="Parent category not found")
+
+    # Create category
+    new_category = models.Category(name=name,slug=slug,parent_id=payload.parent_id)
+
+    db.add(new_category)
+    db.commit()
+    db.refresh(new_category)
+
+    return {
+        "message": "Category created successfully",
+        "category": {
+            "id": new_category.id,
+            "name": new_category.name,
+            "slug": new_category.slug,
+            "parent_id": new_category.parent_id
+        }
+    }

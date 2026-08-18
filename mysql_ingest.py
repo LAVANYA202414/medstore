@@ -98,6 +98,10 @@ try:
             model=str(row.get('Attribute 1 value(s)', ''))[:255],
             images=str(row['Images']).split(',')[0].strip()[:500],
             tags=str(row['Tags'])[:1000]
+            pub_raw = str(row.get('Published','1')).strip().lower()
+            is_published = pub_raw in ['1','true','yes']
+            vis_raw = str(row.get('Visibility in catalogue','visible')).strip().lower()
+            is_visible = False if 'hidden' in vis_raw else True
         )
 
         seen_cat_ids = set()

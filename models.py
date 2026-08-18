@@ -26,6 +26,7 @@ class Product(Base):
     in_stock = Column(Boolean, default=True)
     is_featured = Column(Boolean, default=False)
     published = Column(Boolean, default=True)
+    visibility = Column(Boolean, default = True)
     brand = Column(String(100), default="Generic")
     model = Column(String(255)) # Attribute 1 value(s)
     images = Column(Text) # store first image url or comma separated

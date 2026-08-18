@@ -23,15 +23,15 @@ ALGORITHM = "HS256"
 security = HTTPBearer()
 
 
-
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+
 @router.post("/login")
 # Use the model as a parameter in your function
 def login(login_data: LoginRequest, db: Session = Depends(get_db)):
-    # 3. Access the values using login_data.email and login_data.password
+    # Access the values using login_data.email and login_data.password
     user = db.query(models.User).filter(models.User.email == login_data.email).first()
     
     # Check the password:
