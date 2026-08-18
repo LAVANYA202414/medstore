@@ -227,7 +227,7 @@ def get_products(
     }
 
 
-@router.get("/get-categories")
+@router.get("/categories")
 def get_categories(db: Session = Depends(get_db)):
     all_cats = db.query(models.Category).all()
     children_map = {}
@@ -257,7 +257,7 @@ def get_categories(db: Session = Depends(get_db)):
     return build_tree(None)
 
 
-@router.get("/get-product/{product_id}")
+@router.get("/products/{product_id}")
 def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
