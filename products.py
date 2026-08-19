@@ -390,6 +390,9 @@ def get_admin_products(
             "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
             "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
             "specifications": {"Model": p.model or ""},
+            "published": bool(p.published),
+            "visibility": bool(p.visibility),
+            "is_featured": bool(p.is_featured),
             "_raw_categories": raw_cats
         })
 
