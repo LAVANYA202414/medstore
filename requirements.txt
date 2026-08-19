@@ -13,18 +13,19 @@ sentence-transformers
 pandas
 python-dotenv
 spello
+sqlalchemy
+mysql-connector-python
+alembic
 
 langchain-ollama
 
 sqlalchemy
-mysql-connector-python
 
 bcrypt
 passlib
 
 pyjwt
 pymysql
-jwt
 
 email-validator
 pydantic[email]
