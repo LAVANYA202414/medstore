@@ -320,51 +320,77 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
     }
 
-
 @router.get("/admin/products")
 def get_admin_products(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
-    admin=Depends(get_current_admin)):
-    query = (
-        db.query(models.Product)
-        .options(joinedload(models.Product.categories)))
-    total_items = query.count()
+    admin=Depends(get_current_admin)
+):
+    all_cats = db.query(models.Category).all()
+    all_cats_map = {c.id: c for c in all_cats}
+
+    def get_path(cat):
+        parts = []
+        curr = cat
+        visited = set()
+        while curr and curr.id not in visited:
+            visited.add(curr.id)
+            parts.append(curr.name)
+            curr = all_cats_map.get(curr.parent_id) if curr.parent_id else None
+        return " > ".join(reversed(parts))
+
+    base_q = db.query(models.Product).options(
+        joinedload(models.Product.categories)
+    ).order_by(models.Product.id.desc())
+
+    total_items = db.query(func.count(models.Product.id)).scalar()
     total_pages = math.ceil(total_items / limit) if total_items else 1
 
-    products = (
-        query
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all())
+    products = base_q.offset((page - 1) * limit).limit(limit).all()
 
     result = []
     for p in products:
         try:
-            price = float(p.regular_price or p.sale_price or 0)
+            price = float(p.sale_price or p.regular_price or 0)
         except:
             price = 0
+
+        short_desc = p.short_description or ""
+        if not short_desc:
+            short_desc = (p.description or "")[:150]
+
+        cat_paths = [get_path(c) for c in p.categories] if p.categories else []
+        raw_cats = ", ".join(cat_paths)
+
+        if cat_paths:
+            last_path = cat_paths[-1]
+            last_part = last_path.split(">")[-1].strip()
+            cat_id = to_slug(last_part)
+            cat_name = last_part
+        else:
+            cat_id = "uncategorized"
+            cat_name = "Uncategorized"
+            raw_cats = "Uncategorized"
+
         result.append({
             "id": p.id,
             "name": p.name,
             "slug": p.slug or to_slug(p.name),
+            "description": strip_html(short_desc),
+            "longDescription": strip_html(p.description or ""),
+            "categoryId": [cat_id],
+            "categoryName": [cat_name],
             "price": price,
             "brand": p.brand or "Generic",
             "inStock": bool(p.in_stock),
-            "published": bool(p.published),
-            "visibility": bool(p.visibility),
-            "is_featured": bool(p.is_featured),
-            "image": (
-                p.images.split(",")[0].strip()
-                if p.images
-                else "/products/placeholder.png"
-            ),
-            "tags": [
-                t.strip()
-                for t in str(p.tags or "").split(",")
-                if t.strip()
-            ][:5],
+            "rating": 4.5,
+            "tint": "#dceef7",
+            "icon": cat_id.split('-')[0],
+            "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
+            "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
+            "specifications": {"Model": p.model or ""},
+            "_raw_categories": raw_cats
         })
 
     return {
