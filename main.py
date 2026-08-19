@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 # Routing
-# app.include_router(ingest.router)
+app.include_router(ingest.router)
 app.include_router(query.router)
 app.include_router(products.router)
 app.include_router(auth.router) # for /api/login
