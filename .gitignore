@@ -1,6 +1,6 @@
 # Credentials and environment secrets
 .env
-
+venv/
 # Ignore python environment files and dependencies
 med_store_env/
 medical_store_env
