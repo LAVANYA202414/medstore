@@ -17,3 +17,4 @@ embedding_dir/
 tranformer_model/
 
 build_chroma.py
+alembic.ini
