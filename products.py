@@ -638,3 +638,72 @@ def create_category(payload: CategoryCreate,db: Session = Depends(get_db),admin=
             "parent_id": new_category.parent_id
         }
     }
+
+
+@router.get("/admin/products/{product_id}")
+def get_admin_product_by_id(
+    product_id: int,
+    db: Session = Depends(get_db),
+    admin = Depends(get_current_admin)):
+
+    all_cats = db.query(models.Category).all()
+    all_cats_map = {c.id: c for c in all_cats}
+
+    def get_path(cat):
+        parts = []
+        curr = cat
+        visited = set()
+        while curr and curr.id not in visited:
+            visited.add(curr.id)
+            parts.append(curr.name)
+            curr = all_cats_map.get(curr.parent_id) if curr.parent_id else None
+        return " > ".join(reversed(parts))
+
+    p = db.query(models.Product).options(
+        joinedload(models.Product.categories)
+    ).filter(models.Product.id == product_id).first()
+
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+
+    cat_paths = [get_path(c) for c in p.categories]
+
+    if not cat_paths:
+        leafIds, leafNames = [], []
+        full_category_paths = []
+    else:
+        last_path = cat_paths[-1]
+        last_part = last_path.split(">")[-1].strip()
+        leafIds = [to_slug(last_part)]
+        leafNames = [last_part]
+        full_category_paths = cat_paths
+
+    try:
+        price = float(p.regular_price or p.sale_price or 0)
+    except:
+        price = 0
+
+    return {
+        "id": p.id,
+        "name": p.name,
+        "slug": p.slug or to_slug(p.name),
+        "description": strip_html(p.short_description or (p.description or "")[:150]),
+        "longDescription": strip_html(p.description or ""),
+        "short_description": p.short_description,
+        "regular_price": p.regular_price,
+        "sale_price": p.sale_price,
+        "price": price,
+        "categoryId": leafIds,
+        "categoryName": leafNames,
+        "categoryPaths": full_category_paths,
+        "brand": p.brand or "Generic",
+        "model": p.model,
+        "inStock": bool(p.in_stock),
+        "in_stock": p.in_stock,
+        "published": p.published,
+        "visibility": p.visibility,
+        "is_featured": getattr(p, 'is_featured', False),
+        "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
+        "images": p.images,
+        "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()],
+    }
