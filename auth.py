@@ -64,7 +64,7 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
         password_hash=hashed,
         is_admin=False,
         is_active=True,
-        is_verified=True # default true as you asked
+        is_verified=True
     )
     db.add(new_user)
     db.commit()
@@ -117,8 +117,6 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         "exp": datetime.utcnow() + timedelta(hours=12)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-    # Give the pass to the user:
     return {"access_token": token, "token_type": "bearer", "is_admin": user.is_admin}
 
 
