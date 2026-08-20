@@ -143,9 +143,9 @@ def get_products(
 
         if not matched:
             return {"error": f"Product '{product}' not found"}
-        if len(matched) == 1:
-            clean = {k: v for k, v in matched[0].items() if not k.startswith("_")}
-            return clean
+        # if len(matched) == 1:
+        #     clean = {k: v for k, v in matched[0].items() if not k.startswith("_")}
+        #     return clean
 
         total_items = len(matched)
         total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
