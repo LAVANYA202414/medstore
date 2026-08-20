@@ -130,6 +130,7 @@ def get_products(
                     "categoryName": [cat_name],
                     "price": price,
                     "brand": p.brand or "Generic",
+                    "visibility": p.visibility,
                     "inStock": bool(p.in_stock),
                     "rating": 4.5,
                     "tint": "#dceef7",
@@ -220,6 +221,7 @@ def get_products(
             "subcategoryName": sub,
             "price": price,
             "brand": p.brand or "Generic",
+            "visibility": p.visibility,
             "inStock": bool(p.in_stock),
             "rating": 4.5,
             "tint": "#dceef7",
@@ -316,6 +318,7 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "brand": p.brand or "Generic",
         "inStock": bool(p.in_stock),
         "published": p.published,
+        "visibility": p.visibility,
         "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
     }
@@ -325,8 +328,7 @@ def get_admin_products(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
-    admin=Depends(get_current_admin)
-):
+    admin=Depends(get_current_admin)):
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
 

@@ -98,7 +98,7 @@ def user_login(login_data: LoginRequest, db: Session = Depends(get_db)):
 
 # --- ADMIN LOGIN ---
 @router.post("/admin/login")
-def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+def admin_login(login_data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == login_data.email).first()
 
     if not user or not pwd_context.verify(login_data.password, user.password_hash):
@@ -173,3 +173,14 @@ def update_user(user_id: int, payload: UserUpdateByAdmin, db: Session = Depends(
     db.commit()
     db.refresh(user)
     return {"message": "User updated", "user": {"id": user.id, "email": user.email, "is_verified": user.is_verified, "is_active": user.is_active, "is_admin": user.is_admin}}
+
+
+# # --- DELETE ---
+# @router.delete("/users/{user_id}")
+# def delete_user(user_id: int, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
+#     user = db.query(models.User).filter(models.User.id == user_id).first()
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     db.delete(user)
+#     db.commit()
+#     return {"message": f"User {user_id} deleted"}
