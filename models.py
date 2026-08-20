@@ -43,7 +43,6 @@ class Category(Base):
     name = Column(String(255), nullable=False)
     slug = Column(String(255), index=True)
     parent_id = Column(Integer, ForeignKey('categories.id'), nullable=True)
-
     products = relationship("Product", secondary=product_categories, back_populates="categories")
 
 
@@ -54,5 +53,6 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     is_admin = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
