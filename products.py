@@ -544,11 +544,12 @@ def activate_product(
     
     # Search product by id in database.
     product = (db.query(models.Product).filter(models.Product.id == product_id).first())
+    print("prodict id {product.id} product name  {products.name} product visibility {product.visibility}")
     if not product:
         raise HTTPException(status_code=404,detail="Product not found")
 
-    # Set the published status to True to show it to shoppers again
-    product.published = True
+    # Set the visibility status to True to show it to shoppers again
+    product.visibility = True
     db.commit()
     db.refresh(product)
 
@@ -556,7 +557,7 @@ def activate_product(
         "message": "Product activated successfully",
         "id": product.id,
         "name": product.name,
-        "published": product.published
+        "visibility": product.visibility
     }
 
 
@@ -569,9 +570,8 @@ def deactivate_product(
     # Search product by id
     product = (db.query(models.Product).filter(models.Product.id == product_id).first())
     if not product:raise HTTPException(status_code=404,detail="Product not found")
-
-    # Set the published status to False to hide it from shoppers
-    product.published = False
+    # Set the visibility status to False to hide it from shoppers
+    product.visibility = False
     db.commit()
     db.refresh(product)
 
@@ -579,7 +579,7 @@ def deactivate_product(
         "message": "Product deactivated successfully",
         "id": product.id,
         "name": product.name,
-        "published": product.published
+        "visibility": product.visibility
     }
 
 
