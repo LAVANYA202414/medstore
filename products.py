@@ -688,7 +688,7 @@ def update_category_name(
 
     # Update ONLY name (slug and parent_id stay same)
     category.name = new_name
-    # If you also want slug to auto-update with name, uncomment below:
+    # Change slug too:
     # category.slug = to_slug(new_name)
 
     db.commit()
