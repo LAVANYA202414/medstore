@@ -66,12 +66,12 @@ OLLAMA_BASE_URL=http://localhost:11434
 pip install -r requirements.txt
 ```
 
-If `requirements.txt` `doesn't` work then :
-
 ```bash
+# For environment
 python3 -m venv med_store_env
 source med_store_env/bin/activate
 
+# If requirements.txt doesn't work then: 
 pip install fastapi uvicorn sqlalchemy pymysql python-dotenv
 pip install passlib pyjwt langchain-chroma langchain-ollama
 pip install pandas python-multipart email-validator
