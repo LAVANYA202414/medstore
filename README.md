@@ -62,7 +62,9 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 ### Step 0: Install dependencies
 
-**pip install -r requirements.txt**
+```bash
+pip install -r requirements.txt
+```
 
 If `requirements.txt` `doesn't` work then :
 
