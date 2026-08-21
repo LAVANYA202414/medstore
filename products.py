@@ -323,6 +323,7 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
     }
 
+
 @router.get("/admin/products")
 def get_admin_products(
     page: int = Query(1, ge=1),
@@ -494,8 +495,8 @@ def update_product(
     product_id: int,
     payload: ProductUpdate,
     db: Session = Depends(get_db),
-    admin = Depends(get_current_admin)
-):
+    admin = Depends(get_current_admin)):
+
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
         raise HTTPException(404, "Product not found")
@@ -636,6 +637,70 @@ def create_category(payload: CategoryCreate,db: Session = Depends(get_db),admin=
             "name": new_category.name,
             "slug": new_category.slug,
             "parent_id": new_category.parent_id
+        }
+    }
+
+
+# --- UPDATE CATEGORY ---
+class CategoryNameUpdate(BaseModel):
+    name: str
+
+
+@router.patch("/categories/{category_id}")
+def update_category_name(
+    category_id: int,
+    payload: CategoryNameUpdate,
+    db: Session = Depends(get_db),
+    admin = Depends(get_current_admin)):
+
+    # Find category
+    category = db.query(models.Category).filter(models.Category.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    # Clean and validate name
+    new_name = payload.name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Category name is required")
+    
+    if len(new_name) < 2:
+        raise HTTPException(status_code=400, detail="Category name too short")
+
+    # If name is same, no need to update
+    if new_name.lower() == category.name.lower():
+        return {
+            "message": "No change - name is same",
+            "category": {
+                "id": category.id,
+                "name": category.name,
+                "slug": category.slug,
+                "parent_id": category.parent_id
+            }
+        }
+
+    # Check duplicate name (excluding self)
+    existing = db.query(models.Category).filter(
+        models.Category.name.ilike(new_name),
+        models.Category.id != category_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Category with this name already exists")
+
+    # Update ONLY name (slug and parent_id stay same)
+    category.name = new_name
+    # If you also want slug to auto-update with name, uncomment below:
+    # category.slug = to_slug(new_name)
+
+    db.commit()
+    db.refresh(category)
+
+    return {
+        "message": "Category name updated successfully",
+        "category": {
+            "id": category.id,
+            "name": category.name,
+            "slug": category.slug,
+            "parent_id": category.parent_id
         }
     }
 

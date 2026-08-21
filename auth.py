@@ -51,7 +51,7 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
-# --- SIGNUP FOR USERS ---
+# --- USER SIGNUP ---
 @router.post("/signup", status_code=201)
 def signup(payload: SignupRequest, db: Session = Depends(get_db)):
     existing = db.query(models.User).filter(models.User.email == payload.email).first()

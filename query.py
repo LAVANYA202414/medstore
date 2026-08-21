@@ -60,6 +60,7 @@ def clean_tokens(s: str):
     toks = [t.lower() for t in re.findall(r'\w+', s.lower())]
     return [t for t in toks if t not in STOP_WORDS and len(t) >= 3]
 
+
 def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
     q_lower = user_q.lower().strip()
     q_toks = clean_tokens(q_lower)
@@ -116,6 +117,7 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
         if matched == len(name_toks) and matched == len(q_toks):
             return row
     return None
+
 
 @router.post("/query")
 def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db)):
