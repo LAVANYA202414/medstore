@@ -17,7 +17,7 @@ Full-stack backend for medical supplies store with MySQL relational DB + Chroma 
 
 **Two databases:**
 - **MySQL (`medstore_db`)**: Products, Categories, Users, product_categories join table
-- **ChromaDB (`./chroma_db/`)**: Vector embeddings of products for semantic search (`/api/query`)
+- **ChromaDB (`./chroma_db/`)**: Vector embeddings of products for semantic search (`/query`)
 
 ---
 
@@ -31,7 +31,7 @@ med_store/
 ├── products.py          # /products, /admin/products, CRUD, category logic
 ├── query.py             # /query - RAG bot: MySQL exact + Chroma vector search
 ├── auth.py              # /api/signup, /user/login, /admin/login, /user/me
-├── ingest.py            # POST /ingest -> builds chroma_db from products.csv
+├── ingest.py            # POST /ingest -> builds chroma_db from products_cleaned.csv
 ├── mysql_ingest.py      # CLI: CSV -> MySQL (categories chain + products)
 ├── create_db.py         # Creates MySQL database medstore_db + writes .env
 ├── create_admin.py      # Creates admin user from .env ADMIN_EMAIL/PASSWORD
@@ -62,6 +62,10 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 ### Step 0: Install dependencies
 
+**pip install -r requirements.txt**
+
+If `requirements.txt` `doesn't` work then :
+
 ```bash
 python3 -m venv med_store_env
 source med_store_env/bin/activate
@@ -91,7 +95,7 @@ If fails, create manually:
 CREATE DATABASE medstore_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-### Step 2: Ingest Products to MySQL
+### Step 2: Ingest Products to MySQL (If not exists)
 
 This builds categories tree (`Emergency > Rescue`) and links products.
 
@@ -148,7 +152,6 @@ uvicorn main:app --reload --port 8000
 ```http
 GET /products?category=Defibrillators&page=1&limit=10
 GET /products?product=Transit Chair
-GET /products?product=defimaster
 ```
 Response:
 ```json
@@ -179,17 +182,16 @@ Response:
 ### Admin Product APIs (Auth required)
 
 ```
-GET /admin/products?page=1&limit=10
-  -> Header: Authorization: Bearer <admin_token>
-  -> Returns same structure + published, visibility, is_featured
-
 POST /create-category
-  Body: {"name": "Defibrillators", "slug": "defibrillators", "parent_id": null}
-
-POST /products
-PATCH /products/{id}
-PATCH /products/{id}/activate
-PATCH /products/{id}/deactivate
+GET /admin/products/{product_id}
+PATCH /categories/{category_id}
+PATCH /products/{product_id}
+PATCH /products/{product_id}/activate
+PATCH /products/{product_id}/deactivate
+GET /admin/products
+POST /create-products
+GET /api/users
+PATCH /api/users/{user_id}
 ```
 
 ### RAG Search API (MySQL + Chroma)
@@ -248,23 +250,14 @@ Token: JWT HS256, 12h expiry, payload `{user_id, is_admin, exp}`
 
 ## 6. Common Issues & Fixes
 
-**1. `query.count() crash with joinedload`**
-```python
-# WRONG
-total_items = query.count()
-# CORRECT
-total_items = db.query(func.count(models.Product.id)).scalar()
-# Or separate base query without joinedload for count
-```
-
-**2. Chroma DB not found**
+**1. Chroma DB not found**
 ```bash
 ls chroma_db/
 # If not exists -> POST /ingest
 # Check OLLAMA_BASE_URL in .env, ollama serve running
 ```
 
-**3. `is_admin` check in /login blocks users**
+**2. `is_admin` check in /login blocks users**
 - Use separate endpoints: `/api/user/login` (users) vs `/api/admin/login` (admin)
 - `get_current_admin` should check admin, not `login`
 
@@ -285,52 +278,23 @@ User: id, email unique, password_hash, is_admin, is_active, created_at
 
 ---
 
-## 8. Frontend Integration
-
-```js
-// User signup
-fetch('/api/signup', {method:'POST', body: JSON.stringify({email, password, confirm_password})})
-
-// User login
-fetch('/api/user/login', {method:'POST', body: JSON.stringify({email, password})})
-  .then(r=>r.json())
-  .then(d=>localStorage.setItem('token', d.access_token))
-
-// Products
-fetch('/products?category=Rescue&page=1&limit=20')
-fetch('/products?product=defibrillator')
-
-// AI Search
-fetch('/query', {method:'POST', body: JSON.stringify({user_query: "chair for emergency"})})
-
-// Admin
-fetch('/admin/products', {headers: {Authorization: `Bearer ${adminToken}`}})
-```
-
----
-
-## 9. Scripts
+## 8. Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `create_db.py` | Create MySQL DB + .env |
-| `mysql_ingest.py` | CSV -> MySQL (categories chain) |
+| `mysql_ingest.py` | CSV -> MySQL |
 | `ingest.py` | CSV -> Chroma DB (vector) |
 | `create_admin.py` | Create admin user |
 | `check_db.py` | Debug: count products/categories/links |
 
 ---
 
-## 10. Production Checklist
+## 9. Production Checklist
 
 - Change `SECRET_KEY` in .env
 - Set strong `ADMIN_PASSWORD`
 - Restrict CORS origins in `main.py`
 - Use `mysql+pymysql` with real credentials, not root:@localhost
-- Run `ollama serve` as systemd service
 - Backup `chroma_db/` after ingest (rebuild is expensive)
-- Add indexes: `Product.slug`, `Category.slug`, `User.email` already indexed
-
 ---
-
-## License: Internal MedStore Project
