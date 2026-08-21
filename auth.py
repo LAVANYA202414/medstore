@@ -83,9 +83,9 @@ def user_login(login_data: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User deactivated")
     if not user.is_verified:
-        raise HTTPException(status_code=403, detail="user not verified error")
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="User not verified by admin")
+        raise HTTPException(status_code=403, detail="user is currently deactivated.")
+    # if not user.is_verified:
+    #     raise HTTPException(status_code=403, detail="User not verified by admin")
 
     payload = {
         "user_id": user.id,

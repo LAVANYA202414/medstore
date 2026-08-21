@@ -10,12 +10,14 @@ router = APIRouter()
 
 BASE = Path(__file__).resolve().parent
 CHROMA_DIR = BASE / "chroma_db"
-CSV_PATH = BASE / "products.csv"
+CSV_PATH = BASE / "products_cleaned.csv"
+
 
 def clean(t):
     t = unescape(str(t).replace("\\n"," ").replace("\n"," "))
     t = re.sub(r"<[^>]+>"," ",t)
     return re.sub(r"\s+"," ",t).strip()[:800]
+
 
 @router.post("/ingest")
 def ingest_csv():
