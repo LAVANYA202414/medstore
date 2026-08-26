@@ -29,3 +29,5 @@ pymysql
 
 email-validator
 pydantic[email]
+
+python-multipart

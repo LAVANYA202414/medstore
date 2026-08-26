@@ -35,6 +35,7 @@ class Product(Base):
     categories = relationship("Category", secondary=product_categories, back_populates="products")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
 # Category Table
 class Category(Base):
     __tablename__ = "categories"
@@ -56,3 +57,38 @@ class User(Base):
     is_verified = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+    # Relationship to chats
+    chat_topics = relationship("ChatTopic", back_populates="user", cascade="all, delete-orphan")
+    chat_histories = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
+
+
+# Chat History Table
+class ChatTopic(Base):
+    __tablename__ = "chat_topics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(255), nullable=False) # Topic name like "Transit Chairs"
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="chat_topics")
+    messages = relationship("ChatHistory", back_populates="topic", cascade="all, delete-orphan")
+
+
+
+class ChatHistory(Base):
+    __tablename__ = "chat_history"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    topic_id = Column(Integer, ForeignKey("chat_topics.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    user_query = Column(Text, nullable=False)
+    response_type = Column(String(50))
+    response_json = Column(Text)
+    products_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="chat_histories")
+    topic = relationship("ChatTopic", back_populates="messages")

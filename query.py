@@ -1,19 +1,27 @@
-from fastapi import APIRouter, HTTPException, Depends
+import auth
+import models
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
-import re, difflib, os, traceback, logging
+import re, difflib, os, traceback, logging, json
 from pydantic import BaseModel
-from pathlib import Path
 from collections import Counter
 from sqlalchemy.orm import Session
 import pandas as pd
+from typing import Optional
 from database import get_db
-import models
+from sqlalchemy import func
+from datetime import datetime
+datetime.utcnow()
 
-router = APIRouter()
+
+
+router = APIRouter(tags=["chat"])
 
 class QueryRequest(BaseModel):
     user_query: str
+    topic_id: Optional[str] = None
 
 EMBED_MODEL = "all-minilm"
 CHROMA_DIR = Path(__file__).parent / "chroma_db"
@@ -24,49 +32,44 @@ logger = logging.getLogger("query")
 
 embedding_function = None
 vector_db = None
-TOKEN_PRODUCT_COUNT = None
+
+def generate_topic_title(query: str) -> str:
+    cleaned = query.strip()
+    for prefix in ["show me", "i need", "price of", "what is", "give me", "cost of"]:
+        if cleaned.lower().startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+    words = cleaned.split()[:6]
+    title = " ".join(words)
+    return title.title()[:60] if title else query[:60].title()
 
 def get_resources():
     global embedding_function, vector_db
     if vector_db is not None:
         return embedding_function, vector_db
-
     if not CHROMA_DIR.exists():
-        msg = f"chroma_db not found at {CHROMA_DIR}. Files in {CHROMA_DIR.parent}: {list(CHROMA_DIR.parent.iterdir())}"
-        logger.error(msg)
-        raise HTTPException(status_code=500, detail=msg)
-
+        raise HTTPException(status_code=500, detail=f"chroma_db not found at {CHROMA_DIR}")
     try:
         embedding_function = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
         embedding_function.embed_query("test")
     except Exception as e:
-        tb = traceback.format_exc()
-        logger.error(tb)
-        raise HTTPException(status_code=500, detail=f"Ollama failed at {OLLAMA_BASE_URL}: {e}\n{tb}")
-
+        raise HTTPException(status_code=500, detail=f"Ollama failed: {e}")
     try:
         vector_db = Chroma(persist_directory=str(CHROMA_DIR), embedding_function=embedding_function)
-        vector_db.get(limit=1) # test
-
+        vector_db.get(limit=1)
     except Exception as e:
-        tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to load DB: {e}\n{tb}")
-
+        raise HTTPException(status_code=500, detail=f"Failed to load DB: {e}")
     return embedding_function, vector_db
-
 
 STOP_WORDS = {"price","of","cost","what","is","the","a","an","show","me","give","details","detail","for","in","on","please","tell","about","description","desc","info","information"}
 def clean_tokens(s: str):
     toks = [t.lower() for t in re.findall(r'\w+', s.lower())]
     return [t for t in toks if t not in STOP_WORDS and len(t) >= 3]
 
-
 def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
     q_lower = user_q.lower().strip()
     q_toks = clean_tokens(q_lower)
     if not q_toks:
         return None
-
     def contains_all(name_lower):
         for qt in q_toks:
             qt_root = qt[:-1] if qt.endswith('s') and len(qt)>3 else qt
@@ -74,11 +77,9 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
                 if not any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in clean_tokens(name_lower)):
                     return False
         return True
-
     match_count = df_local['Name_lower'].apply(contains_all).sum()
     if match_count > 1:
         return None
-
     if len(q_toks) == 1:
         qt = q_toks[0]
         count = 0
@@ -97,17 +98,14 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
         if count == 1:
             return exact_match_row
         return None
-
     for _, row in PRODUCTS_SORTED.iterrows():
         name_lower = str(row['Name_lower']).strip()
         if not name_lower:
             continue
-        # Exact match only
         if name_lower == q_lower:
             return row
         if name_lower in q_lower and len(q_lower) < len(name_lower) + 10:
             return row
-
         name_toks = clean_tokens(name_lower)
         if not name_toks:
             continue
@@ -118,144 +116,275 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
             return row
     return None
 
+def run_rag_logic(user_query: str, db: Session):
+    _, v_db = get_resources()
+    db_products = db.query(models.Product).filter(models.Product.published == True, models.Product.visibility == True).all()
+    if not db_products:
+        return {"products": [], "query": user_query, "type": "category"}
+    rows = []
+    for p in db_products:
+        rows.append({"id": p.id, "Name": p.name, "slug": p.slug, "regular_price": p.regular_price, "sale_price": p.sale_price, "brand": p.brand, "images": p.images, "tags": p.tags, "description": p.description, "short_description": p.short_description, "_db_obj": p})
+    df_local = pd.DataFrame(rows).fillna("")
+    df_local['Name_lower'] = df_local['Name'].astype(str).str.lower().str.strip()
+    PRODUCTS_SORTED = df_local.sort_values(by='Name', key=lambda x: x.str.len(), ascending=False)
+    prod_row = is_product_query(user_query, df_local, PRODUCTS_SORTED)
+    if prod_row is not None:
+        prod = prod_row.to_dict()
+        prod.pop('Name_lower', None); prod.pop('_db_obj', None)
+        return {"products": [prod], "query": user_query, "type": "product"}
+    q_lower = user_query.lower().strip()
+    q_toks = clean_tokens(q_lower)
+    if q_toks:
+        def matches(name_lower):
+            for qt in q_toks:
+                qt_root = qt[:-1] if qt.endswith('s') and len(qt)>3 else qt
+                if qt not in name_lower and qt_root not in name_lower:
+                    if not any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in clean_tokens(name_lower)):
+                        return False
+            return True
+        mask = df_local['Name_lower'].apply(matches)
+        matched_df = df_local[mask]
+        if len(matched_df) > 1:
+            final, seen = [], set()
+            for _, r in matched_df.iterrows():
+                name = str(r.get("Name","")).strip().lower()
+                if name in seen: continue
+                d = r.to_dict(); d.pop('Name_lower', None); d.pop('_db_obj', None)
+                final.append(d); seen.add(name)
+            return {"products": final, "query": user_query, "type": "category", "count": len(final)}
+    results = v_db.similarity_search_with_score(user_query, k=20)
+    final, seen = [], set()
+    for doc, _ in results:
+        prod_id = doc.metadata.get("id") or doc.metadata.get("row")
+        r = None
+        if prod_id is not None:
+            try:
+                r = df_local.iloc[int(prod_id)].to_dict() if str(prod_id).isdigit() and int(prod_id) < len(df_local) else None
+            except: r = None
+        if r is None:
+            r = {"Name": doc.metadata.get("Name") or doc.page_content}
+        name = str(r.get("Name","")).strip()
+        if not name or name.lower() in seen: continue
+        r.pop('Name_lower', None); r.pop('_db_obj', None)
+        final.append(r); seen.add(name.lower())
+        if len(final) >= 10: break
+    if not final:
+        final = df_local.head(10).to_dict(orient="records")
+        for f in final: f.pop('Name_lower', None); f.pop('_db_obj', None)
+    return {"products": final[:10], "query": user_query, "type": "category"}
+
+# @router.get("/topics")
+# def get_all_topics(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+#     topics = db.query(models.ChatHistory.topic, func.count(models.ChatHistory.id).label('count'), func.max(models.ChatHistory.created_at).label('last_chat')).filter(models.ChatHistory.user_id == current_user.id, models.ChatHistory.topic!= None).group_by(models.ChatHistory.topic).order_by(func.max(models.ChatHistory.created_at).desc()).all()
+#     return [{"title": t.topic, "count": t.count, "last_chat": t.last_chat} for t in topics]
+
+# @router.get("/topics/{topic_name}")
+# def get_chats_by_topic(topic_name: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+#     chats = db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id, models.ChatHistory.topic == topic_name).order_by(models.ChatHistory.created_at.asc()).all()
+#     return {"topic": topic_name, "messages": [{"id": c.id, "query": c.user_query, "response": json.loads(c.response_json) if c.response_json else {}, "created_at": c.created_at} for c in chats]}
+
 
 @router.post("/query")
-def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db)):
+def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    result = run_rag_logic(request.user_query, db)
+
     try:
-        _, v_db = get_resources()
+        chat_topic = None
 
-        # --- LOAD FROM DATABASE INSTEAD OF CSV ---
-        # Get all published products from DB
-        db_products = db.query(models.Product).filter(
-            models.Product.published == True,
-            models.Product.visibility == True
-        ).all()
+        # If topic_id is sent -> continue existing chat
+        if request.topic_id:
+            chat_topic = db.query(models.ChatTopic).filter(
+                models.ChatTopic.id == request.topic_id,
+                models.ChatTopic.user_id == current_user.id
+            ).first()
 
-        if not db_products:
-            return {"products": [], "query": request.user_query, "type": "category"}
+        # No topic_id, OR topic_id was invalid/not owned by user -> start a NEW chat
+        if not chat_topic:
+            title = request.user_query.strip()[:80]  # topic name = first message
+            chat_topic = models.ChatTopic(
+                user_id=current_user.id,
+                title=title
+            )
+            db.add(chat_topic)
+            db.flush()  # get chat_topic.id before using it below
+            is_new_chat = True
+        else:
+            is_new_chat = False
+            chat_topic.updated_at = datetime.utcnow()
 
-        # Convert DB to DataFrame to keep your same logic
-        rows = []
-        for p in db_products:
-            rows.append({
-                "id": p.id,
-                "Name": p.name,
-                "slug": p.slug,
-                "regular_price": p.regular_price,
-                "sale_price": p.sale_price,
-                "brand": p.brand,
-                "images": p.images,
-                "tags": p.tags,
-                "description": p.description,
-                "short_description": p.short_description,
-                "_db_obj": p # keep ref
-            })
-        df_local = pd.DataFrame(rows).fillna("")
-        df_local['Name_lower'] = df_local['Name'].astype(str).str.lower().str.strip()
+        chat = models.ChatHistory(
+            user_id=current_user.id,
+            topic_id=chat_topic.id,
+            user_query=request.user_query,
+            response_type=result.get("type", "category"),
+            response_json=json.dumps(result, default=str),
+            products_count=len(result.get("products", []))
+        )
+        db.add(chat)
+        db.commit()
 
-        # Build TOKEN_PRODUCT_COUNT like before but from DB
-        TOKEN_PRODUCT_COUNT = Counter()
-        for name in df_local['Name_lower']:
-            unique_toks = set(clean_tokens(name))
-            for tok in unique_toks:
-                TOKEN_PRODUCT_COUNT[tok] += 1
-                if tok.endswith('s'):
-                    TOKEN_PRODUCT_COUNT[tok[:-1]] += 1
+        result["chat_id"] = chat.id
+        result["topic_id"] = chat_topic.id
+        result["topic_title"] = chat_topic.title
+        result["is_new_chat"] = is_new_chat
+        return result
 
-        PRODUCTS_SORTED = df_local.sort_values(by='Name', key=lambda x: x.str.len(), ascending=False)
-
-        prod_row = is_product_query(request.user_query, df_local, PRODUCTS_SORTED)
-        if prod_row is not None:
-            prod = prod_row.to_dict()
-            prod.pop('Name_lower', None)
-            prod.pop('_db_obj', None)
-            return {"products": [prod], "query": request.user_query, "type": "product"}
-
-        # --- CATEGORY KEYWORD SEARCH FOR ANY LENGTH ---
-        q_lower = request.user_query.lower().strip()
-        q_toks = clean_tokens(q_lower)
-
-        if q_toks:
-            # find all products where ALL query tokens appear in name
-            def matches(name_lower):
-                for qt in q_toks:
-                    qt_root = qt[:-1] if qt.endswith('s') and len(qt)>3 else qt
-                    if qt not in name_lower and qt_root not in name_lower:
-                        # fuzzy check
-                        if not any(difflib.SequenceMatcher(None, qt, nt).ratio() >= 0.85 for nt in clean_tokens(name_lower)):
-                            return False
-                return True
-
-            mask = df_local['Name_lower'].apply(matches)
-            matched_df = df_local[mask]
-
-            if len(matched_df) > 1:
-                final, seen = [], set()
-                for _, r in matched_df.iterrows():
-                    name = str(r.get("Name","")).strip().lower()
-                    if name in seen:
-                        continue
-                    d = r.to_dict()
-                    d.pop('Name_lower', None)
-                    d.pop('_db_obj', None)
-                    final.append(d)
-                    seen.add(name)
-                return {"products": final, "query": request.user_query, "type": "category", "count": len(final)}
-
-        # --- FALLBACK VECTOR SEARCH - NOW FETCH FROM DB ---
-        results = v_db.similarity_search_with_score(request.user_query, k=20)
-        final, seen = [], set()
-        for doc, _ in results:
-            # Try to get product by id from chroma metadata
-            prod_id = doc.metadata.get("id") or doc.metadata.get("row")
-            r = None
-            if prod_id is not None:
-                try:
-                    # if row is index, get from df
-                    r = df_local.iloc[int(prod_id)].to_dict() if str(prod_id).isdigit() and int(prod_id) < len(df_local) else None
-                except:
-                    r = None
-                # if id is real DB id, query it
-                if r is None:
-                    try:
-                        db_obj = db.query(models.Product).filter(models.Product.id == int(prod_id)).first()
-                        if db_obj:
-                            r = {"Name": db_obj.name, "id": db_obj.id, "slug": db_obj.slug, "regular_price": db_obj.regular_price}
-                    except:
-                        pass
-
-            if r is None:
-                # last fallback: use metadata directly
-                r = {"Name": doc.metadata.get("Name") or doc.page_content}
-
-            name = str(r.get("Name","")).strip()
-            if not name or name.lower() in seen:
-                continue
-            r.pop('Name_lower', None)
-            r.pop('_db_obj', None)
-            final.append(r)
-            seen.add(name.lower())
-            if len(final) >= 10:
-                break
-
-        # if vector search gave 0 results, return top 10 from DB (fixes "hi" case)
-        if not final:
-            final = df_local.head(10).to_dict(orient="records")
-            for f in final:
-                f.pop('Name_lower', None)
-                f.pop('_db_obj', None)
-
-        return {"products": final[:10], "query": request.user_query, "type": "category"}
-
-    except HTTPException:
-        raise
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"\n========== QUERY CRASH ==========\nQuery: {request.user_query}\n{tb}\n===============================\n")
-        logger.error(tb)
-        raise HTTPException(status_code=500, detail={
-            "error": str(e),
-            "traceback": tb,
-            "query": request.user_query,
-            "chroma_exists": CHROMA_DIR.exists(),
+        db.rollback()
+        logger.error(traceback.format_exc())
+        raise HTTPException(500, str(e))
+
+# --- GET CHAT HISTORY (only logged-in user can see their own) ---
+@router.get("/query/history")
+def get_chat_history(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+    page: int = QueryParam(1, ge=1),
+    limit: int = QueryParam(20, ge=1, le=100)
+):
+    total = db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id).count()
+    
+    chats = db.query(models.ChatHistory)\
+        .filter(models.ChatHistory.user_id == current_user.id)\
+        .order_by(models.ChatHistory.created_at.desc())\
+        .offset((page-1)*limit)\
+        .limit(limit)\
+        .all()
+    
+    history = []
+    for c in chats:
+        try:
+            resp = json.loads(c.response_json) if c.response_json else {}
+        except:
+            resp = {}
+        history.append({
+            "id": c.id,
+            "query": c.user_query,
+            "response": resp,
+            "type": c.response_type,
+            "products_count": c.products_count,
+            "created_at": c.created_at
         })
+
+        print(history)
+    
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "history": history
+    }
+
+
+@router.get("/query/history/{chat_id}")
+def get_single_chat(
+    chat_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    chat = db.query(models.ChatHistory).filter(
+        models.ChatHistory.id == chat_id,
+        models.ChatHistory.user_id == current_user.id
+    ).first()
+    
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    try:
+        resp = json.loads(chat.response_json) if chat.response_json else {}
+    except:
+        resp = {}
+
+    return {
+        "id": chat.id,
+        "query": chat.user_query,
+        "response": resp,
+        "created_at": chat.created_at
+    }
+
+
+# @router.delete("/query/history/{chat_id}")
+# def delete_chat(
+#     chat_id: int,
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(auth.get_current_user)
+# ):
+#     chat = db.query(models.ChatHistory).filter(
+#         models.ChatHistory.id == chat_id,
+#         models.ChatHistory.user_id == current_user.id
+#     ).first()
+#     if not chat:
+#         raise HTTPException(status_code=404, detail="Chat not found")
+    
+#     db.delete(chat)
+#     db.commit()
+#     return {"message": "Chat deleted"}
+
+
+# @router.delete("/query/history")
+# def clear_all_history(
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(auth.get_current_user)
+# ):
+#     db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id).delete()
+#     db.commit()
+#     return {"message": "All chat history cleared"}
+
+
+class StartChatRequest(BaseModel):
+    user_query: str
+
+@router.post("/topics/start", tags=["chat"])
+def start_new_chat(
+    request: StartChatRequest, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """
+    START NEW CHAT API
+    Input: { "user_query": "show me transit chairs" }
+    - Creates new topic with title = first message
+    - Saves first message in chat_history
+    - Returns topic_id to use for continuing
+    """
+    try:
+        # RAG logic
+        result = run_rag_logic(request.user_query, db)
+
+        # Create NEW topic - title = first message (ChatGPT style)
+        title = request.user_query.strip()[:80]
+        chat_topic = models.ChatTopic(
+            user_id=current_user.id,
+            title=title
+        )
+        db.add(chat_topic)
+        db.flush() # get id
+
+        # Create first chat message
+        chat = models.ChatHistory(
+            user_id=current_user.id,
+            topic_id=chat_topic.id,
+            user_query=request.user_query,
+            response_type=result.get("type", "category"),
+            response_json=json.dumps(result, default=str),
+            products_count=len(result.get("products", []))
+        )
+        db.add(chat)
+        db.commit()
+        db.refresh(chat_topic)
+        db.refresh(chat)
+
+        return {
+            "message": "New chat started",
+            "topic_id": chat_topic.id,
+            "topic_title": chat_topic.title,
+            "chat_id": chat.id,
+            "query": chat.user_query,
+            "response": result,
+            "created_at": chat.created_at
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))

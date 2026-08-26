@@ -34,13 +34,8 @@ def normalize(text: str):
 
 
 @router.get("/products")
-def get_products(
-    category: Optional[str] = Query(None),
-    product: Optional[str] = Query(None, description="Product name or slug"),
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
-    ):
+def get_products(category: Optional[str] = Query(None),product: Optional[str] = Query(None, description="Product name or slug"),page: int = Query(1, ge=1),limit: int = Query(10, ge=1, le=100),db: Session = Depends(get_db)):
+
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
 
@@ -68,11 +63,11 @@ def get_products(
 
         db_products = base_q.filter(
             or_(
+                # It will find a match if the word is at the beginning, middle, or end of the text.
                 models.Product.name.ilike(f"%{prod_norm}%"),
                 models.Product.slug.ilike(f"%{prod_slug}%"),
-                models.Product.tags.ilike(f"%{prod_norm}%")
-            )
-        ).all()
+                models.Product.tags.ilike(f"%{prod_norm}%"))).all()
+
         if not db_products:
             db_products = base_q.all()
 
@@ -239,7 +234,9 @@ def get_products(
 
 @router.get("/categories")
 def get_categories(db: Session = Depends(get_db)):
+
     all_cats = db.query(models.Category).all()
+    # Map parent IDs to their child categories
     children_map = {}
     for c in all_cats:
         children_map.setdefault(c.parent_id, []).append(c)
@@ -249,10 +246,13 @@ def get_categories(db: Session = Depends(get_db)):
         nodes = sorted(nodes, key=lambda x: x.name.lower())
         out = []
         for node in nodes:
+            # Skip if name is only numbers
             if node.name.isdigit():
                 continue
+            # Skip if name contains no letters
             if not re.search(r'[a-zA-Z]', node.name):
                 continue
+            # get subcategories
             child_nodes = build_tree(node.id)
             out.append({
                 "id": node.slug or to_slug(node.name),
@@ -263,7 +263,6 @@ def get_categories(db: Session = Depends(get_db)):
                 "children": child_nodes
             })
         return out
-
     return build_tree(None)
 
 
@@ -325,11 +324,9 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/admin/products")
-def get_admin_products(
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db),
-    admin=Depends(get_current_admin)):
+def get_admin_products(page: int = Query(1, ge=1),limit: int = Query(10, ge=1, le=100),db: Session = Depends(get_db),admin=Depends(get_current_admin)):
+    # Get all categories from database
+    print(admin)
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
 
@@ -343,26 +340,29 @@ def get_admin_products(
             curr = all_cats_map.get(curr.parent_id) if curr.parent_id else None
         return " > ".join(reversed(parts))
 
+    # Setup database query to get products (newest first)
     base_q = db.query(models.Product).options(
         joinedload(models.Product.categories)
     ).order_by(models.Product.id.desc())
 
+    # Calculate pagination totals
     total_items = db.query(func.count(models.Product.id)).scalar()
     total_pages = math.ceil(total_items / limit) if total_items else 1
-
+    # Get just the items needed for the current page
     products = base_q.offset((page - 1) * limit).limit(limit).all()
 
     result = []
     for p in products:
+        # Try to find a valid price, use 0 if broken
         try:
             price = float(p.sale_price or p.regular_price or 0)
         except:
             price = 0
-
+        # Create a short summary text if one is missing
         short_desc = p.short_description or ""
         if not short_desc:
             short_desc = (p.description or "")[:150]
-
+        # Get the full text path for each category
         cat_paths = [get_path(c) for c in p.categories] if p.categories else []
         raw_cats = ", ".join(cat_paths)
 
@@ -491,11 +491,7 @@ class ProductUpdate(BaseModel):
     
 # --- UPDATE ---
 @router.patch("/products/{product_id}")
-def update_product(
-    product_id: int,
-    payload: ProductUpdate,
-    db: Session = Depends(get_db),
-    admin = Depends(get_current_admin)):
+def update_product(product_id: int,payload: ProductUpdate,db: Session = Depends(get_db),admin = Depends(get_current_admin)):
 
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
@@ -538,10 +534,7 @@ def update_product(
 
 # --- ACTIVATE PRODUCT ---
 @router.patch("/products/{product_id}/activate")
-def activate_product(
-    product_id: int,
-    db: Session = Depends(get_db),
-    admin=Depends(get_current_admin)):
+def activate_product(product_id: int,db: Session = Depends(get_db),admin=Depends(get_current_admin)):
     
     # Search product by id in database.
     product = (db.query(models.Product).filter(models.Product.id == product_id).first())
@@ -564,10 +557,8 @@ def activate_product(
 
 # --- DEACTIVATE PRODUCT ---
 @router.patch("/products/{product_id}/deactivate")
-def deactivate_product(
-    product_id: int,
-    db: Session = Depends(get_db),
-    admin=Depends(get_current_admin)):
+def deactivate_product(product_id: int,db: Session = Depends(get_db),admin=Depends(get_current_admin)):
+
     # Search product by id
     product = (db.query(models.Product).filter(models.Product.id == product_id).first())
     if not product:raise HTTPException(status_code=404,detail="Product not found")
@@ -647,11 +638,7 @@ class CategoryNameUpdate(BaseModel):
 
 
 @router.patch("/categories/{category_id}")
-def update_category_name(
-    category_id: int,
-    payload: CategoryNameUpdate,
-    db: Session = Depends(get_db),
-    admin = Depends(get_current_admin)):
+def update_category_name(category_id: int,payload: CategoryNameUpdate,db: Session = Depends(get_db),admin = Depends(get_current_admin)):
 
     # Find category
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
@@ -706,10 +693,7 @@ def update_category_name(
 
 
 @router.get("/admin/products/{product_id}")
-def get_admin_product_by_id(
-    product_id: int,
-    db: Session = Depends(get_db),
-    admin = Depends(get_current_admin)):
+def get_admin_product_by_id(product_id: int,db: Session = Depends(get_db),admin = Depends(get_current_admin)):
 
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
