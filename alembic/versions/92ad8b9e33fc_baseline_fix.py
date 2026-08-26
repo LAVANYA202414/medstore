@@ -17,9 +17,29 @@ down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+import sqlalchemy as sa
+from alembic import op
+
 def upgrade() -> None:
     """Upgrade schema."""
-    # 1. First, create the chat_history table with all columns
+    # 1. Create chat_topics first (since chat_history depends on it)
+    op.create_table(
+        'chat_topics',
+        sa.Column('id', sa.Integer(), nullable=False, autoincrement=True),
+        sa.Column('user_id', sa.Integer(), nullable=False),
+        sa.Column('title', sa.String(length=255), nullable=False),
+        sa.Column('created_at', sa.DateTime(), nullable=True),
+        sa.Column('updated_at', sa.DateTime(), nullable=True),
+        sa.PrimaryKeyConstraint('id')
+    )
+    # Add indexes for chat_topics
+    op.create_index(op.f('ix_chat_topics_id'), 'chat_topics', ['id'], unique=False)
+    op.create_index(op.f('ix_chat_topics_user_id'), 'chat_topics', ['user_id'], unique=False)
+    
+    # Add foreign key from chat_topics to users table
+    op.create_foreign_key('fk_chat_topics_user_id', 'chat_topics', 'users', ['user_id'], ['id'])
+
+    # 2. Now create the chat_history table
     op.create_table(
         'chat_history',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -32,28 +52,28 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=True),
         sa.PrimaryKeyConstraint('id')
     )
-
-    # 2. Add performance indexes matching your model
+    # Add indexes for chat_history
     op.create_index(op.f('ix_chat_history_user_id'), 'chat_history', ['user_id'], unique=False)
     op.create_index(op.f('ix_chat_history_topic_id'), 'chat_history', ['topic_id'], unique=False)
 
-    # 3. Establish the foreign key constraints with ondelete CASCADE
-    op.create_foreign_key(
-        'fk_chat_history_user_id', 'chat_history', 'users', 
-        ['user_id'], ['id'], ondelete='CASCADE'
-    )
-    op.create_foreign_key(
-        'fk_chat_history_topic_id', 'chat_history', 'chat_topics', 
-        ['topic_id'], ['id'], ondelete='CASCADE'
-    )
+    # Add foreign keys for chat_history
+    op.create_foreign_key('fk_chat_history_user_id', 'chat_history', 'users', ['user_id'], ['id'], ondelete='CASCADE')
+    op.create_foreign_key('fk_chat_history_topic_id', 'chat_history', 'chat_topics', ['topic_id'], ['id'], ondelete='CASCADE')
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    # Drop indexes and the table to safely revert
+    # Drop chat_history components
     op.drop_constraint('fk_chat_history_topic_id', 'chat_history', type_='foreignkey')
     op.drop_constraint('fk_chat_history_user_id', 'chat_history', type_='foreignkey')
     op.drop_index(op.f('ix_chat_history_topic_id'), table_name='chat_history')
     op.drop_index(op.f('ix_chat_history_user_id'), table_name='chat_history')
     op.drop_table('chat_history')
+    
+    # Drop chat_topics components
+    op.drop_constraint('fk_chat_topics_user_id', 'chat_topics', type_='foreignkey')
+    op.drop_index(op.f('ix_chat_topics_user_id'), table_name='chat_topics')
+    op.drop_index(op.f('ix_chat_topics_id'), table_name='chat_topics')
+    op.drop_table('chat_topics')
+
 
