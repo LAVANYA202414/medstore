@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, text
 
 # Try these common setups - one will work
 TRY_URLS = [
-    "mysql+pymysql://root:@localhost:3306",  # XAMPP default
+    "mysql+pymysql://root:Mysql123!@localhost:3306",  # XAMPP default
     "mysql+pymysql://root:root@localhost:3306", # WAMP/MAMP default
     "mysql+pymysql://root:password@localhost:3306",
     "mysql+pymysql://root:mysql@localhost:3306",

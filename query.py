@@ -160,26 +160,32 @@ def run_rag_logic(user_query: str, db: Session):
                 d = r.to_dict(); d.pop('Name_lower', None); d.pop('_db_obj', None)
                 final.append(d); seen.add(name)
             return {"products": final, "query": user_query, "type": "category", "count": len(final)}
-    results = v_db.similarity_search_with_score(user_query, k=20)
+
+    # --- EMBEDDING SEARCH - OUTSIDE token check ---
+    clean_q = user_query.replace("-", " ").replace("_", " ").strip()
+    if clean_q.lower() in ["hi","hlo","hello","hey","hai"]:
+        return {"products": [], "query": user_query, "type": "greeting"}
+
+    results = v_db.similarity_search_with_score(clean_q, k=20)
     final, seen = [], set()
-    for doc, _ in results:
-        prod_id = doc.metadata.get("id") or doc.metadata.get("row")
-        r = None
-        if prod_id is not None:
-            try:
-                r = df_local.iloc[int(prod_id)].to_dict() if str(prod_id).isdigit() and int(prod_id) < len(df_local) else None
-            except: r = None
-        if r is None:
-            r = {"Name": doc.metadata.get("Name") or doc.page_content}
-        name = str(r.get("Name","")).strip()
-        if not name or name.lower() in seen: continue
-        r.pop('Name_lower', None); r.pop('_db_obj', None)
-        final.append(r); seen.add(name.lower())
-        if len(final) >= 10: break
-    if not final:
-        final = df_local.head(10).to_dict(orient="records")
-        for f in final: f.pop('Name_lower', None); f.pop('_db_obj', None)
-    return {"products": final[:10], "query": user_query, "type": "category"}
+    name_lookup = {str(r['Name']).lower().strip(): r for _, r in df_local.iterrows()}
+    for doc, score in results:
+        meta_name = doc.metadata.get("Name") or doc.metadata.get("name")
+        if not meta_name:
+            meta_name = doc.page_content.split(" Categories:")[0].strip()
+        r = name_lookup.get(str(meta_name).lower().strip())
+        if not r:
+            continue
+        row = r.to_dict() if hasattr(r, 'to_dict') else dict(r)
+        name_key = str(row.get("Name","")).strip().lower()
+        if not name_key or name_key in seen:
+            continue
+        row.pop('Name_lower', None); row.pop('_db_obj', None)
+        final.append(row); seen.add(name_key)
+        if len(final) >= 10:
+            break
+
+        return {"products": final[:10], "query": user_query, "type": "category", "count": len(final)}
 
 
 @router.get("/topics")
@@ -265,8 +271,7 @@ def get_chat_history(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
     page: int = QueryParam(1, ge=1),
-    limit: int = QueryParam(20, ge=1, le=100)
-):
+    limit: int = QueryParam(20, ge=1, le=100)):
     total = db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id).count()
     
     chats = db.query(models.ChatHistory)\
@@ -290,8 +295,6 @@ def get_chat_history(
             "products_count": c.products_count,
             "created_at": c.created_at
         })
-
-        print(history)
     
     return {
         "total": total,
@@ -305,26 +308,40 @@ def get_chat_history(
 def get_single_chat(
     chat_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user)
-):
-    chat = db.query(models.ChatHistory).filter(
-        models.ChatHistory.id == chat_id,
-        models.ChatHistory.user_id == current_user.id
+    current_user: models.User = Depends(auth.get_current_user)):
+
+    topic = db.query(models.ChatTopic).filter(
+        models.ChatTopic.id == chat_id,
+        models.ChatTopic.user_id == current_user.id
     ).first()
-    
-    if not chat:
+    if not topic:
         raise HTTPException(status_code=404, detail="Chat not found")
-    
-    try:
-        resp = json.loads(chat.response_json) if chat.response_json else {}
-    except:
-        resp = {}
+
+    chats = db.query(models.ChatHistory).filter(
+        models.ChatHistory.topic_id == chat_id,
+        models.ChatHistory.user_id == current_user.id
+    ).order_by(models.ChatHistory.created_at.asc()).all()
+
+    messages = []
+    for c in chats:
+        try:
+            resp = json.loads(c.response_json) if c.response_json else {}
+        except:
+            resp = {}
+        messages.append({
+            "id": c.id,
+            "topic_id": c.topic_id,
+            "query": c.user_query,
+            "response": resp,
+            "type": c.response_type,
+            "created_at": c.created_at
+        })
 
     return {
-        "id": chat.id,
-        "query": chat.user_query,
-        "response": resp,
-        "created_at": chat.created_at
+        "topic_id": topic.id,
+        "title": topic.title,
+        "total_messages": len(messages),
+        "messages": messages
     }
 
 

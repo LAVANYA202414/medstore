@@ -1,20 +1,35 @@
 import re
 import math
 import models
-from typing import List
+from typing import List, Optional
 from html import unescape
 from sqlalchemy import or_, func
-from fastapi import status
-from database import get_db
-from typing import Optional
-from pydantic import BaseModel
-from fastapi import Query, APIRouter, Depends
+from fastapi import status, Query, APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
+from database import get_db
 from auth import *
+from pathlib import Path
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings
+import os
 
 
 router = APIRouter()
+CHROMA_DIR = Path(__file__).parent / "chroma_db"
+EMBED_MODEL = "all-minilm"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
+# Lazy load - don't connect at import time
+embedding_function = None
+vector_db = None
+
+def get_chroma():
+    global embedding_function, vector_db
+    if vector_db is not None:
+        return embedding_function, vector_db
+    embedding_function = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+    vector_db = Chroma(persist_directory=str(CHROMA_DIR), embedding_function=embedding_function)
+    return embedding_function, vector_db
 
 def strip_html(text: str) -> str:
     if not text:
@@ -56,22 +71,60 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
 
     # === If searching by product name/slug ===
     if product:
+        # === NEW: EMBEDDING SEARCH FOR SEMANTIC SEARCH ===
+        clean_query = product.replace("-", " ").replace("_", " ").strip()
+        try:
+            _, v_db = get_chroma()
+            results = v_db.similarity_search_with_score(clean_query, k=50)
+            # Map chroma results to DB products
+            all_products = db.query(models.Product).all()
+            name_lookup = {p.name.lower(): p for p in all_products}
+            
+            embedded_products = []
+            seen = set()
+            for doc, score in results:
+                name = doc.metadata.get("Name") or doc.page_content.split(" Categories:")[0].strip()
+                p_obj = name_lookup.get(name.lower().strip())
+                if p_obj and p_obj.id not in seen:
+                    embedded_products.append(p_obj)
+                    seen.add(p_obj.id)
+            
+            # If embedding found products, use them as base
+            if embedded_products:
+                db_products = embedded_products
+            else:
+                # Fallback to LIKE if embedding returns nothing
+                prod_norm = product.strip().lower()
+                prod_slug = to_slug(prod_norm)
+                db_products = base_q.filter(
+                    or_(
+                        models.Product.name.ilike(f"%{prod_norm}%"),
+                        models.Product.slug.ilike(f"%{prod_slug}%"),
+                        models.Product.tags.ilike(f"%{prod_norm}%"))).all()
+
+        except Exception as e:
+            print(f"Chroma failed, fallback to LIKE: {e}")
+            prod_norm = product.strip().lower()
+            prod_slug = to_slug(prod_norm)
+            db_products = base_q.filter(
+                or_(
+                    models.Product.name.ilike(f"%{prod_norm}%"),
+                    models.Product.slug.ilike(f"%{prod_slug}%"),
+                    models.Product.tags.ilike(f"%{prod_norm}%"))).all()
+
+        # Keep your existing matching logic after embedding
+        if not db_products:
+            db_products = base_q.all()
+
         prod_norm = product.strip().lower()
         prod_slug = to_slug(prod_norm)
         prod_root = prod_norm[:-1] if prod_norm.endswith('s') and len(prod_norm) > 3 else prod_norm
         prod_tokens = [t for t in re.findall(r'\w+', prod_norm) if len(t) >= 3]
 
-        db_products = base_q.filter(
-            or_(
-                # It will find a match if the word is at the beginning, middle, or end of the text.
-                models.Product.name.ilike(f"%{prod_norm}%"),
-                models.Product.slug.ilike(f"%{prod_slug}%"),
-                models.Product.tags.ilike(f"%{prod_norm}%"))).all()
-
-        if not db_products:
-            db_products = base_q.all()
-
         matched = []
+        # Check if we are in embedding mode
+        is_embedding_mode = 'embedded_products' in locals() and embedded_products and len(embedded_products) > 0 and db_products == embedded_products
+
         for p in db_products:
             cat_paths = [get_path(c) for c in p.categories]
             raw_cats = ", ".join(cat_paths)
@@ -84,18 +137,22 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
                         return False
                 return True
 
-            is_match = False
-            if contains_all(name_lower):
+            # If embedding search already found semantically similar products, accept directly
+            if is_embedding_mode:
                 is_match = True
-            if not is_match:
-                for path in raw_cats.split(","):
-                    if contains_all(path.lower()):
-                        is_match = True
-                        break
-            if not is_match:
-                slug = p.slug or to_slug(p.name)
-                if prod_norm in slug or prod_root in slug or prod_slug in slug:
+            else:
+                is_match = False
+                if contains_all(name_lower):
                     is_match = True
+                if not is_match:
+                    for path in raw_cats.split(","):
+                        if contains_all(path.lower()):
+                            is_match = True
+                            break
+                if not is_match:
+                    slug = p.slug or to_slug(p.name)
+                    if prod_norm in slug or prod_root in slug or prod_slug in slug:
+                        is_match = True
 
             if is_match:
                 try:
@@ -138,9 +195,6 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
 
         if not matched:
             return {"error": f"Product '{product}' not found"}
-        # if len(matched) == 1:
-        #     clean = {k: v for k, v in matched[0].items() if not k.startswith("_")}
-        #     return clean
 
         total_items = len(matched)
         total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
@@ -152,8 +206,8 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
             "products": paginated
         }
 
-    # === Category filter ===
-    matching_cat_ids = set()  #defined here so count_q can always reference it
+    # === Category filter === (UNCHANGED)
+    matching_cat_ids = set()
     if category:
         cat_norm = normalize(category).lower()
         for c in all_cats:
@@ -174,7 +228,6 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
         else:
             return {"metadata": {"total_items": 0, "total_pages": 1, "current_page": page, "limit": limit}, "products": []}
 
-    # Separate count query without joinedload to avoid SQLAlchemy InvalidRequestError
     count_q = db.query(func.count(models.Product.id)).filter(
         models.Product.published == True,
         models.Product.visibility == True
@@ -184,9 +237,7 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
             models.Product.categories.any(models.Category.id.in_(matching_cat_ids))
         )
     total_items = count_q.scalar()
-
     total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
-
     db_products = base_q.offset((page - 1) * limit).limit(limit).all()
 
     result = []

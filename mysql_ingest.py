@@ -2,17 +2,12 @@ import re
 import os
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy.sql import func
 from sqlalchemy import create_engine
-from sqlalchemy.orm import relationship
 from sqlalchemy.orm import sessionmaker
 from database import Base
-from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, Table
-from models import Product, Category, product_categories
+from models import Product, Category
 
-# Set Up Connection:
 load_dotenv()
-# Base = declarative_base()
 db_url = os.getenv("DATABASE_URL")
 engine = create_engine(db_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine)
@@ -22,12 +17,10 @@ def to_slug(s):
     return re.sub(r'[^a-z0-9]+', '-', str(s).lower()).strip('-')
 
 print("Creating tables...")
-# Resetting the Database:
 Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 print("Tables created: ", list(Base.metadata.tables.keys()))
 
-# Reading and Cleaning the CSV:
 csv_path = "products_cleaned.csv" if os.path.exists("products_cleaned.csv") else "products.csv"
 print(f"Reading {csv_path}...")
 df = pd.read_csv(csv_path).fillna("")
@@ -38,7 +31,6 @@ df = df.drop_duplicates(subset=["Name"], keep="first").reset_index(drop=True)
 db = SessionLocal()
 category_cache = {}
 
-# Managing Categories:
 def get_or_create_category_chain(path_str):
     parts = [p.strip() for p in str(path_str).split(">") if p.strip()]
     result = []
@@ -46,7 +38,6 @@ def get_or_create_category_chain(path_str):
     for part in parts:
         if not part or part.isdigit() or not re.search(r'[a-zA-Z]', part):
             continue
-        # cache key should include parent to handle same name in different branch
         cache_key = f"{parent.id if parent else 'root'}::{part}"
         if cache_key in category_cache:
             cat = category_cache[cache_key]
@@ -54,7 +45,6 @@ def get_or_create_category_chain(path_str):
             result.append(cat)
             continue
 
-        # check DB with both name AND parent_id
         query = db.query(Category).filter(Category.name == part)
         query = query.filter(Category.parent_id == (parent.id if parent else None))
         existing = query.first()
@@ -76,7 +66,6 @@ def get_or_create_category_chain(path_str):
 try:
     print(f"Ingesting {len(df)} products...")
 
-    # Reading and Saving Products:
     for idx, row in df.iterrows():
         try:
             rp = float(str(row['Regular price'] or 0).replace(',', '').replace('€','').strip() or 0)
@@ -86,6 +75,12 @@ try:
             sp = float(str(row['Sale price'] or 0).replace(',', '').replace('€','').strip() or 0)
         except:
             sp = 0
+
+        pub_raw = str(row.get('Published','1')).strip().lower()
+        is_published = pub_raw in ['1','true','yes']
+
+        vis_raw = str(row.get('Visibility in catalogue','visible')).strip().lower()
+        is_visible = False if 'hidden' in vis_raw else True
 
         p = Product(
             name=str(row['Name']).strip()[:500],
@@ -97,11 +92,9 @@ try:
             in_stock=str(row['In stock?']) == '1',
             model=str(row.get('Attribute 1 value(s)', ''))[:255],
             images=str(row['Images']).split(',')[0].strip()[:500],
-            tags=str(row['Tags'])[:1000]
-            pub_raw = str(row.get('Published','1')).strip().lower()
-            is_published = pub_raw in ['1','true','yes']
-            vis_raw = str(row.get('Visibility in catalogue','visible')).strip().lower()
-            is_visible = False if 'hidden' in vis_raw else True
+            tags=str(row['Tags'])[:1000],
+            published=is_published,
+            visibility=is_visible
         )
 
         seen_cat_ids = set()
