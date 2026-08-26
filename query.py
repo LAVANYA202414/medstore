@@ -16,12 +16,13 @@ from datetime import datetime
 datetime.utcnow()
 
 
-
 router = APIRouter(tags=["chat"])
+
 
 class QueryRequest(BaseModel):
     user_query: str
     topic_id: Optional[str] = None
+
 
 EMBED_MODEL = "all-minilm"
 CHROMA_DIR = Path(__file__).parent / "chroma_db"
@@ -33,6 +34,7 @@ logger = logging.getLogger("query")
 embedding_function = None
 vector_db = None
 
+
 def generate_topic_title(query: str) -> str:
     cleaned = query.strip()
     for prefix in ["show me", "i need", "price of", "what is", "give me", "cost of"]:
@@ -41,6 +43,7 @@ def generate_topic_title(query: str) -> str:
     words = cleaned.split()[:6]
     title = " ".join(words)
     return title.title()[:60] if title else query[:60].title()
+
 
 def get_resources():
     global embedding_function, vector_db
@@ -60,10 +63,14 @@ def get_resources():
         raise HTTPException(status_code=500, detail=f"Failed to load DB: {e}")
     return embedding_function, vector_db
 
+
 STOP_WORDS = {"price","of","cost","what","is","the","a","an","show","me","give","details","detail","for","in","on","please","tell","about","description","desc","info","information"}
+
+
 def clean_tokens(s: str):
     toks = [t.lower() for t in re.findall(r'\w+', s.lower())]
     return [t for t in toks if t not in STOP_WORDS and len(t) >= 3]
+
 
 def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
     q_lower = user_q.lower().strip()
@@ -115,6 +122,7 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
         if matched == len(name_toks) and matched == len(q_toks):
             return row
     return None
+
 
 def run_rag_logic(user_query: str, db: Session):
     _, v_db = get_resources()
@@ -173,10 +181,25 @@ def run_rag_logic(user_query: str, db: Session):
         for f in final: f.pop('Name_lower', None); f.pop('_db_obj', None)
     return {"products": final[:10], "query": user_query, "type": "category"}
 
-# @router.get("/topics")
-# def get_all_topics(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-#     topics = db.query(models.ChatHistory.topic, func.count(models.ChatHistory.id).label('count'), func.max(models.ChatHistory.created_at).label('last_chat')).filter(models.ChatHistory.user_id == current_user.id, models.ChatHistory.topic!= None).group_by(models.ChatHistory.topic).order_by(func.max(models.ChatHistory.created_at).desc()).all()
-#     return [{"title": t.topic, "count": t.count, "last_chat": t.last_chat} for t in topics]
+
+@router.get("/topics")
+def get_all_topics(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    topics = db.query(
+        models.ChatTopic.title.label('title'),  # Select the title field explicitly
+        func.count(models.ChatHistory.id).label('count'),
+        func.max(models.ChatHistory.created_at).label('last_chat')
+    ).join(
+        models.ChatHistory, models.ChatTopic.id == models.ChatHistory.topic_id
+    ).filter(
+        models.ChatHistory.user_id == current_user.id
+    ).group_by(
+        models.ChatTopic.id, models.ChatTopic.title
+    ).order_by(
+        func.max(models.ChatHistory.created_at).desc()
+    ).all()
+    
+    return [{"title": t.title, "count": t.count} for t in topics]
+
 
 # @router.get("/topics/{topic_name}")
 # def get_chats_by_topic(topic_name: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -233,6 +256,8 @@ def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_us
         db.rollback()
         logger.error(traceback.format_exc())
         raise HTTPException(500, str(e))
+
+
 
 # --- GET CHAT HISTORY (only logged-in user can see their own) ---
 @router.get("/query/history")
@@ -334,7 +359,8 @@ def get_single_chat(
 class StartChatRequest(BaseModel):
     user_query: str
 
-@router.post("/topics/start", tags=["chat"])
+
+@router.post("/chat/start", tags=["chat"])
 def start_new_chat(
     request: StartChatRequest, 
     db: Session = Depends(get_db), 
