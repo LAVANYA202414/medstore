@@ -31,6 +31,7 @@ def get_chroma():
     vector_db = Chroma(persist_directory=str(CHROMA_DIR), embedding_function=embedding_function)
     return embedding_function, vector_db
 
+
 def strip_html(text: str) -> str:
     if not text:
         return ""

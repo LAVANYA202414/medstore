@@ -161,10 +161,10 @@ def run_rag_logic(user_query: str, db: Session):
                 final.append(d); seen.add(name)
             return {"products": final, "query": user_query, "type": "category", "count": len(final)}
 
-    # --- EMBEDDING SEARCH - OUTSIDE token check ---
+    # --- EMBEDDING SEARCH - FOR EVERY QUERY INCLUDING GREETING ---
     clean_q = user_query.replace("-", " ").replace("_", " ").strip()
-    if clean_q.lower() in ["hi","hlo","hello","hey","hai"]:
-        return {"products": [], "query": user_query, "type": "greeting"}
+
+    # REMOVED greeting check - now similarity search for every query
 
     results = v_db.similarity_search_with_score(clean_q, k=20)
     final, seen = [], set()
@@ -173,20 +173,26 @@ def run_rag_logic(user_query: str, db: Session):
         meta_name = doc.metadata.get("Name") or doc.metadata.get("name")
         if not meta_name:
             meta_name = doc.page_content.split(" Categories:")[0].strip()
-        r = name_lookup.get(str(meta_name).lower().strip())
-        if not r:
+
+        lookup_key = str(meta_name).lower().strip()
+        r = name_lookup.get(lookup_key)
+
+        if r is None: # FIXED: was `if not r:`
             continue
-        row = r.to_dict() if hasattr(r, 'to_dict') else dict(r)
+
+        # r is a Series
+        row = r.to_dict()
         name_key = str(row.get("Name","")).strip().lower()
         if not name_key or name_key in seen:
             continue
-        row.pop('Name_lower', None); row.pop('_db_obj', None)
-        final.append(row); seen.add(name_key)
+        row.pop('Name_lower', None)
+        row.pop('_db_obj', None)
+        final.append(row)
+        seen.add(name_key)
         if len(final) >= 10:
             break
 
-        return {"products": final[:10], "query": user_query, "type": "category", "count": len(final)}
-
+    return {"products": final[:10], "query": user_query, "type": "category", "count": len(final)}
 
 @router.get("/topics")
 def get_all_topics(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -207,6 +213,34 @@ def get_all_topics(db: Session = Depends(get_db), current_user: models.User = De
     return [{"title": t.title, "count": t.count} for t in topics]
 
 
+@router.get("/admin/topics")
+def get_admin_topics(
+    user_id: int,  # Request the user_id as a query parameter
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    # Check if the logged-in user is actually an admin
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to access admin endpoints")
+
+    topics = db.query(
+        models.ChatTopic.title.label('title'),  
+        func.count(models.ChatHistory.id).label('count'),
+        func.max(models.ChatHistory.created_at).label('last_chat')
+    ).join(
+        models.ChatHistory, models.ChatTopic.id == models.ChatHistory.topic_id
+    ).filter(
+        models.ChatHistory.user_id == user_id  # Filter by the requested user_id instead of current_user.id
+    ).group_by(
+        models.ChatTopic.id, models.ChatTopic.title
+    ).order_by(
+        func.max(models.ChatHistory.created_at).desc()
+    ).all()
+    
+    return [{"title": t.title, "count": t.count} for t in topics]
+
+
+
 # @router.get("/topics/{topic_name}")
 # def get_chats_by_topic(topic_name: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
 #     chats = db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id, models.ChatHistory.topic == topic_name).order_by(models.ChatHistory.created_at.asc()).all()
@@ -216,6 +250,18 @@ def get_all_topics(db: Session = Depends(get_db), current_user: models.User = De
 @router.post("/query")
 def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     result = run_rag_logic(request.user_query, db)
+
+    # Clean HTML tags from product descriptions if products exist in the result
+    if "products" in result and isinstance(result["products"], list):
+        for product in result["products"]:
+            if isinstance(product, dict):
+                # Clean description
+                if "description" in product and product["description"]:
+                    product["description"] = re.sub(r'<[^>]*>', '', str(product["description"])).strip()
+                
+                # Clean short_description
+                if "short_description" in product and product["short_description"]:
+                    product["short_description"] = re.sub(r'<[^>]*>', '', str(product["short_description"])).strip()
 
     try:
         chat_topic = None
@@ -310,17 +356,24 @@ def get_single_chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)):
 
-    topic = db.query(models.ChatTopic).filter(
-        models.ChatTopic.id == chat_id,
-        models.ChatTopic.user_id == current_user.id
-    ).first()
+    # ADMIN can see any topic, USER can see only own
+    topic_query = db.query(models.ChatTopic).filter(
+        models.ChatTopic.id == chat_id
+    )
+    if not getattr(current_user, 'is_admin', False):
+        topic_query = topic_query.filter(models.ChatTopic.user_id == current_user.id)
+    
+    topic = topic_query.first()
     if not topic:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    chats = db.query(models.ChatHistory).filter(
-        models.ChatHistory.topic_id == chat_id,
-        models.ChatHistory.user_id == current_user.id
-    ).order_by(models.ChatHistory.created_at.asc()).all()
+    chat_query = db.query(models.ChatHistory).filter(
+        models.ChatHistory.topic_id == chat_id
+    )
+    if not getattr(current_user, 'is_admin', False):
+        chat_query = chat_query.filter(models.ChatHistory.user_id == current_user.id)
+
+    chats = chat_query.order_by(models.ChatHistory.created_at.asc()).all()
 
     messages = []
     for c in chats:
