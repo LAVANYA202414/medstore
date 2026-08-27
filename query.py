@@ -194,10 +194,12 @@ def run_rag_logic(user_query: str, db: Session):
 
     return {"products": final[:10], "query": user_query, "type": "category", "count": len(final)}
 
+
 @router.get("/topics")
 def get_all_topics(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     topics = db.query(
-        models.ChatTopic.title.label('title'),  # Select the title field explicitly
+        models.ChatTopic.id.label('id'),
+        models.ChatTopic.title.label('title'),
         func.count(models.ChatHistory.id).label('count'),
         func.max(models.ChatHistory.created_at).label('last_chat')
     ).join(
@@ -210,7 +212,7 @@ def get_all_topics(db: Session = Depends(get_db), current_user: models.User = De
         func.max(models.ChatHistory.created_at).desc()
     ).all()
     
-    return [{"title": t.title, "count": t.count} for t in topics]
+    return [{"id": t.id, "title": t.title, "count": t.count} for t in topics]
 
 
 @router.get("/admin/topics")
