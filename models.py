@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, Table, UniqueConstraint
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 from database import Base
 from datetime import datetime
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, Table, UniqueConstraint
 
 
 # Many-to-Many: products <-> categories

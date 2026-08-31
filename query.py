@@ -1,18 +1,19 @@
 import auth
 import models
-from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
-import re, difflib, os, traceback, logging, json
-from pydantic import BaseModel
-from collections import Counter
-from sqlalchemy.orm import Session
 import pandas as pd
+from pathlib import Path
 from typing import Optional
 from database import get_db
 from sqlalchemy import func
 from datetime import datetime
+from pydantic import BaseModel
+from collections import Counter
+from sqlalchemy.orm import Session
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings
+import re, difflib, os, traceback, logging, json
+from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
+
 datetime.utcnow()
 
 
@@ -226,6 +227,7 @@ def get_admin_topics(
         raise HTTPException(status_code=403, detail="Not authorized to access admin endpoints")
 
     topics = db.query(
+        models.ChatTopic.id.label('id'),
         models.ChatTopic.title.label('title'),  
         func.count(models.ChatHistory.id).label('count'),
         func.max(models.ChatHistory.created_at).label('last_chat')
@@ -239,8 +241,7 @@ def get_admin_topics(
         func.max(models.ChatHistory.created_at).desc()
     ).all()
     
-    return [{"title": t.title, "count": t.count} for t in topics]
-
+    return [{"id":t.id,"title": t.title, "count": t.count} for t in topics]
 
 
 # @router.get("/topics/{topic_name}")

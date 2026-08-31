@@ -1,17 +1,17 @@
+import os
 import re
 import math
 import models
-from typing import List, Optional
-from html import unescape
-from sqlalchemy import or_, func
-from fastapi import status, Query, APIRouter, Depends
-from sqlalchemy.orm import Session, joinedload
-from database import get_db
 from auth import *
 from pathlib import Path
+from html import unescape
+from database import get_db
+from sqlalchemy import or_, func
+from typing import List, Optional
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
-import os
+from sqlalchemy.orm import Session, joinedload
+from fastapi import status, Query, APIRouter, Depends
 
 
 router = APIRouter()
@@ -19,7 +19,6 @@ CHROMA_DIR = Path(__file__).parent / "chroma_db"
 EMBED_MODEL = "all-minilm"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
-# Lazy load - don't connect at import time
 embedding_function = None
 vector_db = None
 
@@ -72,7 +71,7 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
 
     # === If searching by product name/slug ===
     if product:
-        # === NEW: EMBEDDING SEARCH FOR SEMANTIC SEARCH ===
+        # === EMBEDDING SEARCH FOR SEMANTIC SEARCH ===
         clean_query = product.replace("-", " ").replace("_", " ").strip()
         try:
             _, v_db = get_chroma()
