@@ -12,6 +12,8 @@ from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from sqlalchemy.orm import Session, joinedload
 from fastapi import status, Query, APIRouter, Depends
+from fastapi import BackgroundTasks
+from database import SessionLocal # your sessionmaker
 
 
 router = APIRouter()
@@ -48,8 +50,41 @@ def normalize(text: str):
     return " > ".join([p.strip().lower() for p in str(text).split(">")]).strip()
 
 
+# --- background counters ---
+def inc_product_visits(product_ids: list[int]):
+    db = SessionLocal()
+    try:
+        for pid in product_ids:
+            row = db.query(models.ProductSearchCount).filter_by(product_id=pid).first()
+            
+            if row:
+                row.search_count += 1
+            else:
+                row = models.ProductSearchCount(product_id=pid, search_count=1)
+
+                db.add(row)
+        db.commit()
+    finally:
+        db.close()
+
+
+def inc_category_searches(category_ids: list[int]):
+    db = SessionLocal()
+    try:
+        for cid in category_ids:
+            row = db.query(models.CategorySearchCount).filter_by(category_id=cid).first()
+            if row:
+                row.search_count += 1
+            else:
+                row = models.CategorySearchCount(category_id=cid, search_count=1)
+                db.add(row)
+        db.commit()
+    finally:
+        db.close()
+
+
 @router.get("/products")
-def get_products(category: Optional[str] = Query(None),product: Optional[str] = Query(None, description="Product name or slug"),page: int = Query(1, ge=1),limit: int = Query(10, ge=1, le=100),db: Session = Depends(get_db)):
+def get_products(background_tasks: BackgroundTasks, category: Optional[str] = Query(None),product: Optional[str] = Query(None, description="Product name or slug"),page: int = Query(1, ge=1),limit: int = Query(10, ge=1, le=100),db: Session = Depends(get_db)):
 
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
@@ -206,17 +241,20 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
             "products": paginated
         }
 
-    # === Category filter === (UNCHANGED)
+    # === Category filter ===
     matching_cat_ids = set()
     if category:
-        cat_norm = normalize(category).lower()
+        cat_norm = normalize(category).lower().strip()
+        matched_cat = None
         for c in all_cats:
-            path = get_path(c).lower()
-            parts = [s.strip() for s in path.split(">")]
-            if cat_norm == path or cat_norm in parts or f" > {cat_norm}" in path or f"{cat_norm} >" in path or cat_norm == c.name.lower() or cat_norm == c.slug.lower():
-                matching_cat_ids.add(c.id)
+            if cat_norm == c.name.lower().strip() or cat_norm == c.slug.lower().strip():
+                matched_cat = c
+                break
 
-        if matching_cat_ids:
+        if matched_cat: # <-- FIX: check matched_cat not matching_cat_ids
+            matching_cat_ids.add(matched_cat.id) # <-- ADD IT HERE
+            background_tasks.add_task(inc_category_searches, [matched_cat.id])
+
             to_process = list(matching_cat_ids)
             while to_process:
                 parent_id = to_process.pop()
@@ -224,6 +262,7 @@ def get_products(category: Optional[str] = Query(None),product: Optional[str] = 
                     if child.parent_id == parent_id and child.id not in matching_cat_ids:
                         matching_cat_ids.add(child.id)
                         to_process.append(child.id)
+
             base_q = base_q.filter(models.Product.categories.any(models.Category.id.in_(matching_cat_ids)))
         else:
             return {"metadata": {"total_items": 0, "total_pages": 1, "current_page": page, "limit": limit}, "products": []}
@@ -318,7 +357,7 @@ def get_categories(db: Session = Depends(get_db)):
 
 
 @router.get("/products/{product_id}")
-def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
+def get_product_by_id(product_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
 
@@ -340,6 +379,8 @@ def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
     # hide if no visibility
     if not getattr(p, 'visibility', None):
         raise HTTPException(status_code=404, detail=f"Product {product_id} not found - no visibility")
+
+    background_tasks.add_task(inc_product_visits, [product_id])
 
     cat_paths = [get_path(c) for c in p.categories]
 

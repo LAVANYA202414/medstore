@@ -217,11 +217,8 @@ def get_all_topics(db: Session = Depends(get_db), current_user: models.User = De
 
 
 @router.get("/admin/topics")
-def get_admin_topics(
-    user_id: int,  # Request the user_id as a query parameter
-    db: Session = Depends(get_db), 
-    current_user: models.User = Depends(auth.get_current_user)
-):
+def get_admin_topics(user_id: int,db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+
     # Check if the logged-in user is actually an admin
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not authorized to access admin endpoints")
