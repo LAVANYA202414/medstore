@@ -848,3 +848,49 @@ def get_admin_product_by_id(product_id: int,db: Session = Depends(get_db),admin 
         "images": p.images,
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()],
     }
+
+
+@router.delete("/categories/{category_id}")
+def delete_category(
+    category_id: int,
+    db: Session = Depends(get_db),
+    admin = Depends(get_current_admin)
+):
+    # 1. Find category
+    category = db.query(models.Category).filter(models.Category.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    # 2. Check if it has child categories
+    has_children = db.query(models.Category).filter(models.Category.parent_id == category_id).first()
+    if has_children:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete category with sub-categories. Delete sub-categories first."
+        )
+
+    # 3. Check if it has products linked (remove this if you don't have product relation)
+    # Assuming you have a product table with category_id
+    # If your relation is many-to-many, check accordingly
+    if hasattr(models, 'Product'):
+        has_products = db.query(models.Product).filter(
+            models.Product.categories.any(id=category_id)
+        ).first()
+        if has_products:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete category linked with products. Remove/reassign products first."
+            )
+
+    # 4. Delete
+    db.delete(category)
+    db.commit()
+
+    return {
+        "message": "Category deleted successfully",
+        "deleted_category": {
+            "id": category.id,
+            "name": category.name,
+            "slug": category.slug
+        }
+    }
