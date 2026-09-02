@@ -6,7 +6,7 @@ from auth import *
 from pathlib import Path
 from html import unescape
 from database import get_db
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, desc
 from typing import List, Optional
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session, joinedload
 from fastapi import status, Query, APIRouter, Depends
 from fastapi import BackgroundTasks
 from database import SessionLocal # your sessionmaker
+from datetime import datetime, timedelta
+from collections import Counter
 
 
 router = APIRouter()
@@ -55,14 +57,7 @@ def inc_product_visits(product_ids: list[int]):
     db = SessionLocal()
     try:
         for pid in product_ids:
-            row = db.query(models.ProductSearchCount).filter_by(product_id=pid).first()
-            
-            if row:
-                row.search_count += 1
-            else:
-                row = models.ProductSearchCount(product_id=pid, search_count=1)
-
-                db.add(row)
+            db.add(models.ProductSearchCount(product_id=pid, search_count=1))
         db.commit()
     finally:
         db.close()
@@ -72,12 +67,7 @@ def inc_category_searches(category_ids: list[int]):
     db = SessionLocal()
     try:
         for cid in category_ids:
-            row = db.query(models.CategorySearchCount).filter_by(category_id=cid).first()
-            if row:
-                row.search_count += 1
-            else:
-                row = models.CategorySearchCount(category_id=cid, search_count=1)
-                db.add(row)
+            db.add(models.CategorySearchCount(category_id=cid, search_count=1))
         db.commit()
     finally:
         db.close()
@@ -251,8 +241,8 @@ def get_products(background_tasks: BackgroundTasks, category: Optional[str] = Qu
                 matched_cat = c
                 break
 
-        if matched_cat: # <-- FIX: check matched_cat not matching_cat_ids
-            matching_cat_ids.add(matched_cat.id) # <-- ADD IT HERE
+        if matched_cat:
+            matching_cat_ids.add(matched_cat.id)
             background_tasks.add_task(inc_category_searches, [matched_cat.id])
 
             to_process = list(matching_cat_ids)
@@ -784,6 +774,52 @@ def update_category_name(category_id: int,payload: CategoryNameUpdate,db: Sessio
     }
 
 
+# @router.delete("/categories/{category_id}")
+# def delete_category(
+#     category_id: int,
+#     db: Session = Depends(get_db),
+#     admin = Depends(get_current_admin)
+# ):
+#     # 1. Find category
+#     category = db.query(models.Category).filter(models.Category.id == category_id).first()
+#     if not category:
+#         raise HTTPException(status_code=404, detail="Category not found")
+
+#     # 2. Check if it has child categories
+#     has_children = db.query(models.Category).filter(models.Category.parent_id == category_id).first()
+#     if has_children:
+#         raise HTTPException(
+#             status_code=400, 
+#             detail="Cannot delete category with sub-categories. Delete sub-categories first."
+#         )
+
+#     # 3. Check if it has products linked (remove this if you don't have product relation)
+#     # Assuming you have a product table with category_id
+#     # If your relation is many-to-many, check accordingly
+#     if hasattr(models, 'Product'):
+#         has_products = db.query(models.Product).filter(
+#             models.Product.categories.any(id=category_id)
+#         ).first()
+#         if has_products:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="Cannot delete category linked with products. Remove/reassign products first."
+#             )
+
+#     # 4. Delete
+#     db.delete(category)
+#     db.commit()
+
+#     return {
+#         "message": "Category deleted successfully",
+#         "deleted_category": {
+#             "id": category.id,
+#             "name": category.name,
+#             "slug": category.slug
+#         }
+#     }
+
+
 @router.get("/admin/products/{product_id}")
 def get_admin_product_by_id(product_id: int,db: Session = Depends(get_db),admin = Depends(get_current_admin)):
 
@@ -850,47 +886,107 @@ def get_admin_product_by_id(product_id: int,db: Session = Depends(get_db),admin 
     }
 
 
-# @router.delete("/categories/{category_id}")
-# def delete_category(
-#     category_id: int,
-#     db: Session = Depends(get_db),
-#     admin = Depends(get_current_admin)
-# ):
-#     # 1. Find category
-#     category = db.query(models.Category).filter(models.Category.id == category_id).first()
-#     if not category:
-#         raise HTTPException(status_code=404, detail="Category not found")
+@router.get("/admin/search_counts")
+def get_all_counts(
+    db: Session = Depends(get_db),
+    admin = Depends(get_current_admin)
+):
+    from collections import Counter
+    from datetime import datetime, timedelta
 
-#     # 2. Check if it has child categories
-#     has_children = db.query(models.Category).filter(models.Category.parent_id == category_id).first()
-#     if has_children:
-#         raise HTTPException(
-#             status_code=400, 
-#             detail="Cannot delete category with sub-categories. Delete sub-categories first."
-#         )
+    since_24h = datetime.utcnow() - timedelta(hours=24)
 
-#     # 3. Check if it has products linked (remove this if you don't have product relation)
-#     # Assuming you have a product table with category_id
-#     # If your relation is many-to-many, check accordingly
-#     if hasattr(models, 'Product'):
-#         has_products = db.query(models.Product).filter(
-#             models.Product.categories.any(id=category_id)
-#         ).first()
-#         if has_products:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="Cannot delete category linked with products. Remove/reassign products first."
-#             )
+    # ---------- 24H ----------
+    product_rows_24h = db.query(models.ProductSearchCount).filter(
+        models.ProductSearchCount.created_at >= since_24h
+    ).all()
+    category_rows_24h = db.query(models.CategorySearchCount).filter(
+        models.CategorySearchCount.created_at >= since_24h
+    ).all()
 
-#     # 4. Delete
-#     db.delete(category)
-#     db.commit()
+    p_counter_24h = Counter([r.product_id for r in product_rows_24h])
+    c_counter_24h = Counter([r.category_id for r in category_rows_24h])
 
-#     return {
-#         "message": "Category deleted successfully",
-#         "deleted_category": {
-#             "id": category.id,
-#             "name": category.name,
-#             "slug": category.slug
-#         }
-#     }
+    top_p_24h_ids = [pid for pid, _ in p_counter_24h.most_common(3)]
+    top_c_24h_ids = [cid for cid, _ in c_counter_24h.most_common(3)]
+
+    # bulk fetch names to avoid N+1
+    prod_map_24h = {p.id: p for p in db.query(models.Product).filter(models.Product.id.in_(top_p_24h_ids)).all()} if top_p_24h_ids else {}
+    cat_map_24h = {c.id: c for c in db.query(models.Category).filter(models.Category.id.in_(top_c_24h_ids)).all()} if top_c_24h_ids else {}
+
+    top_products_24h = [
+        {
+            "product_id": pid,
+            "product_name": prod_map_24h.get(pid).name if prod_map_24h.get(pid) else f"Product #{pid}",
+            "slug": prod_map_24h.get(pid).slug if prod_map_24h.get(pid) else None,
+            "visit_count": count
+        }
+        for pid, count in p_counter_24h.most_common(3)
+    ]
+
+    top_categories_24h = [
+        {
+            "category_id": cid,
+            "category_name": cat_map_24h.get(cid).name if cat_map_24h.get(cid) else f"Category #{cid}",
+            "slug": cat_map_24h.get(cid).slug if cat_map_24h.get(cid) else None,
+            "search_count": count
+        }
+        for cid, count in c_counter_24h.most_common(3)
+    ]
+
+    # ---------- ALL TIME ----------
+    p_counter_all = Counter()
+    c_counter_all = Counter()
+
+    # if you have large data, use SQL count for all-time (faster)
+    all_products = db.query(
+        models.ProductSearchCount.product_id,
+        func.count(models.ProductSearchCount.id).label("cnt")
+    ).group_by(models.ProductSearchCount.product_id).order_by(desc("cnt")).limit(3).all()
+
+    all_categories = db.query(
+        models.CategorySearchCount.category_id,
+        func.count(models.CategorySearchCount.id).label("cnt")
+    ).group_by(models.CategorySearchCount.category_id).order_by(desc("cnt")).limit(3).all()
+
+    all_p_ids = [r.product_id for r in all_products]
+    all_c_ids = [r.category_id for r in all_categories]
+
+    prod_map_all = {p.id: p for p in db.query(models.Product).filter(models.Product.id.in_(all_p_ids)).all()} if all_p_ids else {}
+    cat_map_all = {c.id: c for c in db.query(models.Category).filter(models.Category.id.in_(all_c_ids)).all()} if all_c_ids else {}
+
+    top_products_all = [
+        {
+            "product_id": r.product_id,
+            "product_name": prod_map_all.get(r.product_id).name if prod_map_all.get(r.product_id) else f"Product #{r.product_id}",
+            "slug": prod_map_all.get(r.product_id).slug if prod_map_all.get(r.product_id) else None,
+            "visit_count": r.cnt
+        }
+        for r in all_products
+    ]
+
+    top_categories_all = [
+        {
+            "category_id": r.category_id,
+            "category_name": cat_map_all.get(r.category_id).name if cat_map_all.get(r.category_id) else f"Category #{r.category_id}",
+            "slug": cat_map_all.get(r.category_id).slug if cat_map_all.get(r.category_id) else None,
+            "search_count": r.cnt
+        }
+        for r in all_categories
+    ]
+
+    return {
+        "last_24_hours": {
+            # "since": since_24h.isoformat(),
+            "total_product_visits": len(product_rows_24h),
+            "total_category_searches": len(category_rows_24h),
+            "top_products": top_products_24h,
+            "top_categories": top_categories_24h
+        },
+        "all_time": {
+            "total_product_visits": db.query(func.count(models.ProductSearchCount.id)).scalar(),
+            "total_category_searches": db.query(func.count(models.CategorySearchCount.id)).scalar(),
+            "top_products": top_products_all,
+            "top_categories": top_categories_all
+        }
+    }

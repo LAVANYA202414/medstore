@@ -98,8 +98,9 @@ class ProductSearchCount(Base):
     __tablename__ = "product_search_counts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
-    search_count = Column(Integer, default=0, nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    search_count = Column(Integer, default=1, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 # Category Searches - how many times a category was searched / clicked
@@ -107,5 +108,6 @@ class CategorySearchCount(Base):
     __tablename__ = "category_search_counts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
-    search_count = Column(Integer, default=0, nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False, index=True)
+    search_count = Column(Integer, default=1, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
