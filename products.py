@@ -354,11 +354,12 @@ def get_product_by_id(product_id: int, background_tasks: BackgroundTasks, db: Se
     def get_path(cat):
         parts = []
         curr = cat
-        while curr:
+        visited = set()
+        while curr and curr.id not in visited:
+            visited.add(curr.id)
             parts.append(curr.name)
             curr = all_cats_map.get(curr.parent_id) if curr.parent_id else None
         return " > ".join(reversed(parts))
-
     p = db.query(models.Product).options(joinedload(models.Product.categories)).filter(models.Product.id == product_id).first()
     if not p:
         return {"error": f"Product {product_id} not found"}
@@ -387,6 +388,48 @@ def get_product_by_id(product_id: int, background_tasks: BackgroundTasks, db: Se
     except:
         price = 0
 
+    # --- RELATED PRODUCTS ---
+    related_products = []
+    clean_query = p.name.replace("-", " ").replace("_", " ").strip()
+    try:
+        _, v_db = get_chroma()
+        results = v_db.similarity_search_with_score(clean_query, k=50)
+        all_products = db.query(models.Product).filter(
+            models.Product.published == True,
+            models.Product.visibility == True,
+            models.Product.id!= p.id
+        ).all()
+        name_lookup = {prod.name.lower(): prod for prod in all_products}
+
+        seen = set()
+        for doc, score in results:
+            name = doc.metadata.get("Name") or doc.page_content.split(" Categories:")[0].strip()
+            p_obj = name_lookup.get(name.lower().strip())
+            if p_obj and p_obj.id not in seen:
+                related_products.append(p_obj)
+                seen.add(p_obj.id)
+            if len(related_products) >= 3:
+                break
+    except Exception as e:
+        print(f"Chroma related failed: {e}")
+
+    # Fallback to LIKE if Chroma returns nothing - same as /products
+    if not related_products:
+        prod_norm = p.name.strip().lower()
+        prod_slug = to_slug(prod_norm)
+        related_products = db.query(models.Product).options(
+            joinedload(models.Product.categories)
+        ).filter(
+            models.Product.published == True,
+            models.Product.visibility == True,
+            models.Product.id!= p.id,
+            or_(
+                models.Product.name.ilike(f"%{prod_norm}%"),
+                models.Product.slug.ilike(f"%{prod_slug}%"),
+                models.Product.tags.ilike(f"%{prod_norm}%")
+            )
+        ).limit(3).all()
+
     return {
         "id": p.id,
         "name": p.name,
@@ -402,6 +445,17 @@ def get_product_by_id(product_id: int, background_tasks: BackgroundTasks, db: Se
         "visibility": p.visibility,
         "image": p.images.split(',')[0].strip() if p.images else "/products/placeholder.png",
         "tags": [t.strip() for t in str(p.tags or "").split(',') if t.strip()][:5],
+        "related_products": [
+            {
+                "id": r.id,
+                "name": r.name,
+                "slug": r.slug or to_slug(r.name),
+                "price": float(r.regular_price or r.sale_price or 0) if (r.regular_price or r.sale_price) else 0,
+                "image": r.images.split(',')[0].strip() if r.images else "/products/placeholder.png",
+                "brand": r.brand or "Generic",
+                "inStock": bool(r.in_stock),
+            } for r in related_products[:3]
+        ]
     }
 
 
