@@ -248,7 +248,7 @@ def get_admin_topics(user_id: int,db: Session = Depends(get_db), current_user: m
 
 
 @router.post("/query")
-def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db)):
     result = run_rag_logic(request.user_query, db)
 
     # Clean HTML tags from product descriptions if products exist in the result
@@ -269,15 +269,13 @@ def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_us
         # If topic_id is sent -> continue existing chat
         if request.topic_id:
             chat_topic = db.query(models.ChatTopic).filter(
-                models.ChatTopic.id == request.topic_id,
-                models.ChatTopic.user_id == current_user.id
+                models.ChatTopic.id == request.topic_id
             ).first()
 
-        # No topic_id, OR topic_id was invalid/not owned by user -> start a NEW chat
+        # No topic_id, OR topic_id was invalid -> start a NEW chat
         if not chat_topic:
             title = request.user_query.strip()[:80]  # topic name = first message
             chat_topic = models.ChatTopic(
-                user_id=current_user.id,
                 title=title
             )
             db.add(chat_topic)
@@ -288,7 +286,6 @@ def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_us
             chat_topic.updated_at = datetime.utcnow()
 
         chat = models.ChatHistory(
-            user_id=current_user.id,
             topic_id=chat_topic.id,
             user_query=request.user_query,
             response_type=result.get("type", "category"),
@@ -308,7 +305,6 @@ def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db), current_us
         db.rollback()
         logger.error(traceback.format_exc())
         raise HTTPException(500, str(e))
-
 
 
 # --- GET CHAT HISTORY (only logged-in user can see their own) ---
@@ -434,23 +430,14 @@ class StartChatRequest(BaseModel):
 def start_new_chat(
     request: StartChatRequest, 
     db: Session = Depends(get_db), 
-    current_user: models.User = Depends(auth.get_current_user)
 ):
-    """
-    START NEW CHAT API
-    Input: { "user_query": "show me transit chairs" }
-    - Creates new topic with title = first message
-    - Saves first message in chat_history
-    - Returns topic_id to use for continuing
-    """
     try:
         # RAG logic
         result = run_rag_logic(request.user_query, db)
 
-        # Create NEW topic - title = first message (ChatGPT style)
+        # Create NEW topic - titles
         title = request.user_query.strip()[:80]
         chat_topic = models.ChatTopic(
-            user_id=current_user.id,
             title=title
         )
         db.add(chat_topic)
@@ -458,7 +445,6 @@ def start_new_chat(
 
         # Create first chat message
         chat = models.ChatHistory(
-            user_id=current_user.id,
             topic_id=chat_topic.id,
             user_query=request.user_query,
             response_type=result.get("type", "category"),

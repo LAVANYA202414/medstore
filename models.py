@@ -80,7 +80,7 @@ class ChatTopic(Base):
 class ChatHistory(Base):
     __tablename__ = "chat_history"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     topic_id = Column(Integer, ForeignKey("chat_topics.id", ondelete="CASCADE"), nullable=False, index=True)
     
     user_query = Column(Text, nullable=False)

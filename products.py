@@ -13,7 +13,7 @@ from langchain_ollama import OllamaEmbeddings
 from sqlalchemy.orm import Session, joinedload
 from fastapi import status, Query, APIRouter, Depends
 from fastapi import BackgroundTasks
-from database import SessionLocal # your sessionmaker
+from database import SessionLocal # sessionmaker
 from datetime import datetime, timedelta
 from collections import Counter
 
@@ -945,8 +945,6 @@ def get_all_counts(
     db: Session = Depends(get_db),
     admin = Depends(get_current_admin)
 ):
-    from collections import Counter
-    from datetime import datetime, timedelta
 
     since_24h = datetime.utcnow() - timedelta(hours=24)
 
