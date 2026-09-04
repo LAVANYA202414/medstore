@@ -5,14 +5,14 @@ from pathlib import Path
 from typing import Optional
 from database import get_db
 from sqlalchemy import func
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from collections import Counter
 from sqlalchemy.orm import Session
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 import re, difflib, os, traceback, logging, json
-from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
+from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam, Header
 
 datetime.utcnow()
 
@@ -22,7 +22,7 @@ router = APIRouter(tags=["chat"])
 
 class QueryRequest(BaseModel):
     user_query: str
-    topic_id: Optional[str] = None
+    topic_id: Optional[int] = None
 
 
 EMBED_MODEL = "all-minilm"
@@ -123,6 +123,46 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
         if matched == len(name_toks) and matched == len(q_toks):
             return row
     return None
+
+
+def get_optional_user(
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None)
+) -> Optional[models.User]:
+    if not authorization:
+        return None
+    try:
+        token = authorization.strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if not token:
+            return None
+
+        payload = None
+        if hasattr(auth, "decode_access_token"):
+            payload = auth.decode_access_token(token)
+        elif hasattr(auth, "decode_token"):
+            payload = auth.decode_token(token)
+        elif hasattr(auth, "verify_token"):
+            payload = auth.verify_token(token)
+        else:
+            raise AttributeError("No decode function in auth.py")
+
+        user_id = payload.get("sub") or payload.get("user_id") or payload.get("id")
+        if not user_id:
+            return None
+        try:
+            user_id = int(user_id)
+        except:
+            pass
+
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if user and not user.is_active:
+            return None
+        return user
+    except Exception as e:
+        logger.debug(f"Optional auth failed: {e}")
+        return None
 
 
 def run_rag_logic(user_query: str, db: Session):
@@ -248,7 +288,7 @@ def get_admin_topics(user_id: int,db: Session = Depends(get_db), current_user: m
 
 
 @router.post("/query")
-def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db)):
+def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db),current_user: Optional[models.User] = Depends(get_optional_user)):
     result = run_rag_logic(request.user_query, db)
 
     # Clean HTML tags from product descriptions if products exist in the result
@@ -265,28 +305,39 @@ def ask_rag_bot(request: QueryRequest, db: Session = Depends(get_db)):
 
     try:
         chat_topic = None
+        user_id = current_user.id if current_user else None
 
-        # If topic_id is sent -> continue existing chat
+        # If topic_id is sent -> continue only if it belongs to this user (or is guest topic)
         if request.topic_id:
-            chat_topic = db.query(models.ChatTopic).filter(
+            query = db.query(models.ChatTopic).filter(
                 models.ChatTopic.id == request.topic_id
-            ).first()
+            )
+            # If logged in, only allow own topics. If guest, only allow guest topics
+            if current_user:
+                query = query.filter(models.ChatTopic.user_id == current_user.id)
+            else:
+                query = query.filter(models.ChatTopic.user_id.is_(None))
+                
+            chat_topic = query.first()
 
-        # No topic_id, OR topic_id was invalid -> start a NEW chat
+        # No topic_id, OR topic_id invalid/not owned -> start NEW chat
         if not chat_topic:
-            title = request.user_query.strip()[:80]  # topic name = first message
+            title = request.user_query.strip()[:80]
             chat_topic = models.ChatTopic(
+                user_id=user_id,  # NULL if guest
                 title=title
             )
             db.add(chat_topic)
-            db.flush()  # get chat_topic.id before using it below
+            db.flush()
             is_new_chat = True
         else:
             is_new_chat = False
-            chat_topic.updated_at = datetime.utcnow()
+            chat_topic.updated_at = datetime.now(timezone.utc) # <-- new way
 
+        user_id = current_user.id if current_user else None  # <-- if no user, treated as NULL
         chat = models.ChatHistory(
             topic_id=chat_topic.id,
+            user_id=user_id,
             user_query=request.user_query,
             response_type=result.get("type", "category"),
             response_json=json.dumps(result, default=str),
@@ -427,25 +478,19 @@ class StartChatRequest(BaseModel):
 
 
 @router.post("/chat/start", tags=["chat"])
-def start_new_chat(
-    request: StartChatRequest, 
-    db: Session = Depends(get_db), 
-):
+def start_new_chat(request: StartChatRequest,db: Session = Depends(get_db),current_user: Optional[models.User] = Depends(get_optional_user)):
     try:
-        # RAG logic
         result = run_rag_logic(request.user_query, db)
-
-        # Create NEW topic - titles
         title = request.user_query.strip()[:80]
-        chat_topic = models.ChatTopic(
-            title=title
-        )
-        db.add(chat_topic)
-        db.flush() # get id
+        user_id = current_user.id if current_user else None
 
-        # Create first chat message
+        chat_topic = models.ChatTopic(title=title, user_id=user_id)
+        db.add(chat_topic)
+        db.flush()
+
         chat = models.ChatHistory(
             topic_id=chat_topic.id,
+            user_id=user_id,
             user_query=request.user_query,
             response_type=result.get("type", "category"),
             response_json=json.dumps(result, default=str),
@@ -465,7 +510,6 @@ def start_new_chat(
             "response": result,
             "created_at": chat.created_at
         }
-
     except Exception as e:
         db.rollback()
         logger.error(traceback.format_exc())
