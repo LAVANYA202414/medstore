@@ -1,7 +1,4 @@
-import os
-import re
-import math
-import models
+import os, re, math, models, logging, auth
 from auth import *
 from pathlib import Path
 from html import unescape
@@ -11,12 +8,13 @@ from typing import List, Optional
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from sqlalchemy.orm import Session, joinedload
-from fastapi import status, Query, APIRouter, Depends
+from fastapi import status, Query, APIRouter, Depends, Header
 from fastapi import BackgroundTasks
 from database import SessionLocal # sessionmaker
 from datetime import datetime, timedelta
 from collections import Counter
 
+logger = logging.getLogger("query")
 
 router = APIRouter()
 CHROMA_DIR = Path(__file__).parent / "chroma_db"
@@ -25,6 +23,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 embedding_function = None
 vector_db = None
+security_optional = HTTPBearer(auto_error=False)
+
 
 def get_chroma():
     global embedding_function, vector_db
@@ -52,6 +52,34 @@ def normalize(text: str):
     return " > ".join([p.strip().lower() for p in str(text).split(">")]).strip()
 
 
+def save_user_search(query: str, user_id: int = None):
+    db = SessionLocal()
+    try:
+        if query and query.strip():
+            db.add(models.UserSearch(
+                user_id=user_id,
+                searched_query=query.strip()[:500]
+            ))
+            db.commit()
+    finally:
+        db.close()
+
+
+def get_optional_user(db: Session = Depends(get_db),credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)) -> Optional[models.User]:
+
+    if not credentials:
+        return None
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
+        if not user_id:
+            return None
+        return db.query(models.User).filter(models.User.id == int(user_id)).first()
+    except:
+        return None
+
+
 # --- background counters ---
 def inc_product_visits(product_ids: list[int]):
     db = SessionLocal()
@@ -74,7 +102,7 @@ def inc_category_searches(category_ids: list[int]):
 
 
 @router.get("/products")
-def get_products(background_tasks: BackgroundTasks, category: Optional[str] = Query(None),product: Optional[str] = Query(None, description="Product name or slug"),page: int = Query(1, ge=1),limit: int = Query(10, ge=1, le=100),db: Session = Depends(get_db)):
+def get_products(background_tasks: BackgroundTasks,category: Optional[str] = Query(None),product: Optional[str] = Query(None, description="Product name or slug"),page: int = Query(1, ge=1),limit: int = Query(10, ge=1, le=100),db: Session = Depends(get_db),current_user = Depends(get_optional_user)):
 
     all_cats = db.query(models.Category).all()
     all_cats_map = {c.id: c for c in all_cats}
@@ -96,6 +124,11 @@ def get_products(background_tasks: BackgroundTasks, category: Optional[str] = Qu
 
     # === If searching by product name/slug ===
     if product:
+
+        # --- SAVE USER SEARCH ---
+        uid = current_user.id if current_user else None
+        background_tasks.add_task(save_user_search, product, uid)
+
         # === EMBEDDING SEARCH FOR SEMANTIC SEARCH ===
         clean_query = product.replace("-", " ").replace("_", " ").strip()
         try:
@@ -1041,4 +1074,50 @@ def get_all_counts(
             "top_products": top_products_all,
             "top_categories": top_categories_all
         }
+    }
+
+
+# --- USER SEARCHES ---
+@router.get("/user_searches")
+def get_user_searches(db: Session = Depends(get_db),current_user = Depends(get_optional_user)):
+
+    if not current_user:
+        return {"total_items": 0, "searches": []}
+        
+    searches = db.query(models.UserSearch).filter(models.UserSearch.user_id == current_user.id).order_by(desc(models.UserSearch.created_at)).limit(3).all()
+
+    return {
+        "total_items": len(searches),
+        "searches": [
+            {
+                "id": s.id,
+                "user_id": s.user_id,
+                "searched_query": s.searched_query,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at
+            } for s in searches
+        ]
+    }
+
+
+@router.get("/admin/user_searches")
+def get_admin_user_searches(
+    db: Session = Depends(get_db),
+    admin = Depends(get_current_admin)
+):
+    searches = db.query(models.UserSearch)\
+                 .order_by(desc(models.UserSearch.created_at))\
+                 .all()
+
+    return {
+        "total_items": len(searches),
+        "searches": [
+            {
+                "id": s.id,
+                "user_id": s.user_id,
+                "searched_query": s.searched_query,
+                "created_at": s.created_at,
+                # "updated_at": s.updated_at
+            } for s in searches
+        ]
     }

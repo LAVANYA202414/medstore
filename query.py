@@ -1,6 +1,6 @@
-import auth
-import models
+import auth, models
 import pandas as pd
+from auth import *
 from pathlib import Path
 from typing import Optional
 from database import get_db
@@ -34,6 +34,8 @@ logger = logging.getLogger("query")
 
 embedding_function = None
 vector_db = None
+
+security_optional = HTTPBearer(auto_error=False)
 
 
 def generate_topic_title(query: str) -> str:
@@ -125,43 +127,18 @@ def is_product_query(user_q: str, df_local, PRODUCTS_SORTED):
     return None
 
 
-def get_optional_user(
-    db: Session = Depends(get_db),
-    authorization: Optional[str] = Header(default=None)
-) -> Optional[models.User]:
-    if not authorization:
+def get_optional_user(db: Session = Depends(get_db),credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)) -> Optional[models.User]:
+
+    if not credentials:
         return None
     try:
-        token = authorization.strip()
-        if token.lower().startswith("bearer "):
-            token = token[7:].strip()
-        if not token:
-            return None
-
-        payload = None
-        if hasattr(auth, "decode_access_token"):
-            payload = auth.decode_access_token(token)
-        elif hasattr(auth, "decode_token"):
-            payload = auth.decode_token(token)
-        elif hasattr(auth, "verify_token"):
-            payload = auth.verify_token(token)
-        else:
-            raise AttributeError("No decode function in auth.py")
-
-        user_id = payload.get("sub") or payload.get("user_id") or payload.get("id")
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
         if not user_id:
             return None
-        try:
-            user_id = int(user_id)
-        except:
-            pass
-
-        user = db.query(models.User).filter(models.User.id == user_id).first()
-        if user and not user.is_active:
-            return None
-        return user
-    except Exception as e:
-        logger.debug(f"Optional auth failed: {e}")
+        return db.query(models.User).filter(models.User.id == int(user_id)).first()
+    except:
         return None
 
 
